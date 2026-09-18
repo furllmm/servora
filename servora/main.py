@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
-                   uninstall_app, update_app, validate_app_manifest)
+                   uninstall_app, update_app, validate_app_manifest, app_health)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
@@ -105,6 +105,12 @@ class Handler(BaseHTTPRequestHandler):
                 if entry is None:
                     return self._json({"error": "marketplace app not found"}, 404)
                 return self._json(entry.to_dict())
+            if parsed.path == "/api/apps/health":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                app = app_store.get(name)
+                if app is None:
+                    return self._json({"error": "app not found"}, 404)
+                return self._json(app_health(p, app))
             if parsed.path == "/api/apps/get":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 app = app_store.get(name)
