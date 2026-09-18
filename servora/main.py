@@ -15,6 +15,7 @@ from .marketplace_seed import DEMO
 from .ai_import import AIImportError, import_source
 from .ai import AIPlanError, create_container_plan, provider_from_env
 from .ai_execution import analyze_plan, execute_plan
+from .troubleshooting import collect_container_diagnostics, troubleshoot_container
 from .server_browser import BareServerBrowser, validate_server_url
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -120,6 +121,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/containers/health":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 return self._json(p.container_health(name))
+            if parsed.path == "/api/containers/diagnostics":
+                q = parse_qs(parsed.query)
+                name = _name(q.get("name", [""])[0])
+                tail = int(q.get("tail", [200])[0])
+                return self._json(collect_container_diagnostics(p, name, tail))
             if parsed.path == "/api/server-browser":
                 url = parse_qs(parsed.query).get("url", [""])[0]
                 validate_server_url(url)
@@ -140,7 +146,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create"}:
+            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -173,6 +179,14 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"status": "approval_required", **response}, 409)
                     result = execute_plan(p, manifest)
                     return self._json({"status": "launched", **response, "result": result}, 201)
+
+                if parsed.path == "/api/ai/troubleshoot":
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    tail = int(raw.get("tail", 200)) if isinstance(raw, dict) else 200
+                    diagnostics = collect_container_diagnostics(p, name, tail)
+                    provider = provider_from_env()
+                    diagnosis = troubleshoot_container(provider, diagnostics)
+                    return self._json({"provider": provider.name, "diagnostics": diagnostics, "diagnosis": diagnosis})
 
                 if parsed.path == "/api/ai/import":
                     source = raw.get("source") if isinstance(raw, dict) else None
@@ -231,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             if action is None:
                 return self._json({"error": "not found"}, 404)
             return self._json({"name": name, "result": action(name)})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, __import__('servora.troubleshooting', fromlist=['TroubleshootingError']).TroubleshootingError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
