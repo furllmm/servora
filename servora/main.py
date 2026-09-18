@@ -217,6 +217,14 @@ class Handler(BaseHTTPRequestHandler):
                 audit.append("image.pull", "user", name=name, action="pull", summary="Container image pulled", details={"result": result})
                 return self._json({"name": name, "status": "pulled", "result": result})
 
+            if parsed.path == "/api/images/refresh":
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = json.loads(self.rfile.read(length)) if length else {}
+                name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                result = p.refresh_image(name)
+                audit.append("image.refresh", "user", name=name, action="refresh", summary="Container image refreshed", details={"status": result.get("status")})
+                return self._json(result)
+
             if parsed.path in {"/api/images/remove", "/api/volumes/remove", "/api/networks/remove"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = json.loads(self.rfile.read(length)) if length else {}
