@@ -166,3 +166,40 @@ def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
         "managed_apps": sorted(managed_apps),
         "expected_containers": sorted(expected),
     }
+
+
+def repair_reliability(podman, root: str | Path, action: str, *, name: str,
+                       approved: bool = False) -> dict[str, Any]:
+    """Perform one narrowly-scoped reliability repair after explicit approval."""
+    if not approved:
+        return {"status": "approval_required", "action": action, "name": name}
+    if action == "remove_orphan_container":
+        scan = scan_reliability(podman, root)
+        orphan_names = {x.get("name") for x in scan["findings"] if x.get("code") == "orphan_container"}
+        if name not in orphan_names:
+            raise ReliabilityError("Container is not a detected Servora orphan")
+        result = podman.remove_container(name, force=True)
+        return {"status": "repaired", "action": action, "name": name, "result": result}
+    if action == "restore_missing_app":
+        apps = Path(root) / "apps"
+        manifest_path = apps / f"{name}.json"
+        if not manifest_path.exists():
+            raise ReliabilityError("App manifest not found")
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = validate_app_manifest(raw)
+        except (OSError, json.JSONDecodeError, AppManifestError) as exc:
+            raise ReliabilityError("App manifest is corrupted and cannot be restored safely") from exc
+        expected = {service_container_name(manifest.name, service.name) for service in manifest.services}
+        actual = {
+            x for item in podman.list_containers(all=True)
+            for x in ((item.get("Names") if isinstance(item.get("Names"), list) else [item.get("Names") or item.get("Name") or item.get("name")]))
+            if isinstance(x, str)
+        }
+        missing = sorted(expected - actual)
+        if not missing:
+            return {"status": "nothing_to_do", "action": action, "name": name}
+        from .apps import install_app
+        created = install_app(podman, raw, transaction_root=root)
+        return {"status": "repaired", "action": action, "name": name, "created": created}
+    raise ReliabilityError("Unsupported reliability repair action")
