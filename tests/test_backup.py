@@ -73,7 +73,7 @@ def test_restore_rolls_back_created_resources(tmp_path, monkeypatch):
             return name
 
         def container_health(self, name):
-            return {"name": name, "status": "running", "running": True, "healthcheck": None}
+            raise RuntimeError("health check failed")
 
     manifest = {
         "format": "servora-backup",
