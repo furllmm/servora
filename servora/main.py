@@ -19,6 +19,7 @@ from .troubleshooting import TroubleshootingError, collect_container_diagnostics
 from .recovery import RecoveryError, execute_recovery
 from .recovery_policy import RecoveryPolicyError, RecoveryController
 from .server_browser import BareServerBrowser, validate_server_url
+from .audit import AuditLog, AuditError
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
 MODE = os.environ.get("SERVORA_MODE", "user")
@@ -27,6 +28,7 @@ runtime.initialize()
 app_store = AppStore(runtime.root)
 marketplace = MarketplaceStore(runtime.root)
 marketplace.seed([DEMO])
+audit = AuditLog(runtime.root)
 
 try:
     podman = Podman(env=runtime.podman_environment() if MODE == "portable" else None)
@@ -126,6 +128,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/recovery/policy":
                 controller = RecoveryController(p, runtime.root)
                 return self._json(controller.store.load())
+            if parsed.path == "/api/audit":
+                q = parse_qs(parsed.query)
+                return self._json(audit.read(int(q.get("limit", [100])[0]), event=q.get("event", [None])[0], name=q.get("name", [None])[0]))
             if parsed.path == "/api/containers/diagnostics":
                 q = parse_qs(parsed.query)
                 name = _name(q.get("name", [""])[0])
@@ -183,6 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                     if requires_approval and not approved:
                         return self._json({"status": "approval_required", **response}, 409)
                     result = execute_plan(p, manifest)
+                    audit.append("ai.create.launch", "ai", name=manifest.get("name"), action="create_container", summary="AI-generated container plan launched", details={"provider": provider.name, "findings": response["findings"], "health": result.get("health")})
                     return self._json({"status": "launched", **response, "result": result}, 201)
 
                 if parsed.path == "/api/recovery/policy":
@@ -190,12 +196,19 @@ class Handler(BaseHTTPRequestHandler):
                     policy = raw.get("policy") if isinstance(raw, dict) else None
                     if not isinstance(policy, dict):
                         raise RecoveryPolicyError("policy must be an object")
-                    return self._json(controller.store.save(policy))
+                    saved = controller.store.save(policy)
+                    audit.append("recovery.policy.update", "user", action="update_policy", summary="Recovery policy updated", details={"enabled": saved.get("enabled"), "rules": saved.get("rules")})
+                    return self._json(saved)
                 if parsed.path == "/api/recovery/evaluate":
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
                     approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
                     controller = RecoveryController(p, runtime.root)
-                    return self._json(controller.evaluate(name, approved=approved))
+                    result = controller.evaluate(name, approved=approved)
+                    if result.get("status") == "approval_required":
+                        audit.append("recovery.approval_required", "policy", name=name, action=result.get("action"), status="approval_required", summary="Automatic recovery policy proposed an action")
+                    elif result.get("status") == "recovered":
+                        audit.append("recovery.execute", "policy", name=name, action=result.get("action", {}).get("action"), summary="Automatic recovery policy executed an action", details={"health": result.get("result", {}).get("health")})
+                    return self._json(result)
                 if parsed.path == "/api/ai/recover":
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
                     action = raw.get("action") if isinstance(raw, dict) else None
@@ -204,6 +217,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not bool(raw.get("approved", False)):
                         return self._json({"status": "approval_required", "name": name, "action": action}, 409)
                     result = execute_recovery(p, name, action)
+                    audit.append("ai.recovery.execute", "user", name=name, action=action.get("action"), summary="Approved AI recovery action executed", reason=action.get("reason"), details={"health": result.get("health")})
                     return self._json({"status": "recovered", "result": result})
 
                 if parsed.path == "/api/ai/troubleshoot":
@@ -212,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
                     diagnostics = collect_container_diagnostics(p, name, tail)
                     provider = provider_from_env()
                     diagnosis = troubleshoot_container(provider, diagnostics)
+                    audit.append("ai.diagnosis", "ai", name=name, summary=str(diagnosis.get("summary", "")), details={"provider": provider.name, "confidence": diagnosis.get("confidence"), "finding_count": len(diagnosis.get("findings", [])), "actions": diagnosis.get("actions", [])})
+                    for suggested in diagnosis.get("actions", []):
+                        audit.append("ai.recovery.suggestion", "ai", name=name, action=suggested.get("action"), status="suggested", reason=suggested.get("reason"))
                     return self._json({"provider": provider.name, "diagnostics": diagnostics, "diagnosis": diagnosis})
 
                 if parsed.path == "/api/ai/import":
@@ -240,11 +257,13 @@ class Handler(BaseHTTPRequestHandler):
                         raise AppManifestError("App is already installed; use update")
                     result = install_app(p, raw)
                     app_store.save(manifest)
+                    audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
                     return self._json({"app": manifest_to_dict(manifest), "created": result}, 201)
                 old = app_store.get(manifest.name)
                 if old is None:
                     raise AppManifestError("App is not installed")
                 result = update_app(p, old, raw, store=app_store)
+                audit.append("app.update", "user", name=manifest.name, action="update", summary="Servora app updated")
                 return self._json(result)
 
             if parsed.path == "/api/apps/uninstall":
@@ -259,6 +278,7 @@ class Handler(BaseHTTPRequestHandler):
                     remove_networks=q.get("remove_networks", ["0"])[0] == "1",
                 )
                 app_store.remove(name)
+                audit.append("app.uninstall", "user", name=name, action="uninstall", summary="Servora app uninstalled")
                 return self._json({"app": name, "uninstalled": True, **result})
 
             name = _name(parse_qs(parsed.query).get("name", [""])[0])
@@ -270,8 +290,10 @@ class Handler(BaseHTTPRequestHandler):
             action = actions.get(parsed.path)
             if action is None:
                 return self._json({"error": "not found"}, 404)
-            return self._json({"name": name, "result": action(name)})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError) as exc:
+            result = action(name)
+            audit.append("container.action", "user", name=name, action=parsed.path.rsplit("/", 1)[-1], summary="Container action executed")
+            return self._json({"name": name, "result": result})
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
