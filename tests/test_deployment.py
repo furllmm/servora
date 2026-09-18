@@ -1,5 +1,5 @@
 from servora.apps import AppManifest, AppService
-from servora.deployment import capture_app_state, image_status, check_app_updates
+from servora.deployment import capture_app_state, image_status, check_app_updates, build_app_update_preview
 
 
 class DeploymentPodman:
@@ -74,3 +74,21 @@ def test_check_app_updates_refreshes_unique_images_without_redeploying(tmp_path)
     assert p.refresh_calls == ["nginx:latest"]
     assert result["status"] == "current"
     assert result["deployment_recorded"] is True
+
+
+def test_update_preview_is_read_only_and_marks_changed_image(tmp_path):
+    p = DeploymentPodman("sha256:one")
+    capture_app_state(p, manifest(), tmp_path)
+    p.image_id = "sha256:two"
+    result = build_app_update_preview(p, manifest(), tmp_path)
+    assert result["requires_update"] is True
+    assert result["update_service_count"] == 1
+    assert result["services"][0]["action"] == "recreate"
+    assert result["services"][0]["status"] == "update_available"
+    assert load_deployment_state(tmp_path)["services"][0]["image_id"] == "sha256:one"
+
+
+def load_deployment_state(root):
+    import json
+    from pathlib import Path
+    return json.loads((Path(root) / "metadata" / "deployments" / "demo.json").read_text())
