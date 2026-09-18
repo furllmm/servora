@@ -172,3 +172,35 @@ def test_app_operation_reports_missing_container():
     result = start_app(p, _stack_manifest())
     assert result["status"] == "partial"
     assert {x["service"] for x in result["services"] if x["status"] == "missing"} == {"web","cache"}
+
+class ResourceConflictPodman(LifecyclePodman):
+    def __init__(self):
+        super().__init__()
+        self.networks = []
+        self.volumes = []
+    def list_networks(self):
+        return [{"Name": "shared-net"}]
+    def list_volumes(self):
+        return [{"Name": "shared-data"}]
+    def inspect_network(self, name):
+        return {"Name": name, "Containers": {"abc": {"Name": "servora-other-web"}}}
+    def inspect_volume(self, name):
+        return {"Name": name, "Containers": {"abc": {"Name": "external-db"}}}
+
+def test_install_rejects_network_used_by_another_app():
+    from servora.apps import install_app
+    p = ResourceConflictPodman()
+    manifest = {"name":"demo","version":"1","services":[
+        {"name":"web","image":"nginx","networks":["shared-net"]}
+    ]}
+    with pytest.raises(AppManifestError, match="Network 'shared-net'"):
+        install_app(p, manifest, check_ports=False)
+
+def test_install_rejects_volume_used_by_external_container():
+    from servora.apps import install_app
+    p = ResourceConflictPodman()
+    manifest = {"name":"demo","version":"1","services":[
+        {"name":"web","image":"nginx","volumes":["shared-data:/data"]}
+    ]}
+    with pytest.raises(AppManifestError, match="Volume 'shared-data'"):
+        install_app(p, manifest, check_ports=False)
