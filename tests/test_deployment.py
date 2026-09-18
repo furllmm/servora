@@ -1,5 +1,5 @@
 from servora.apps import AppManifest, AppService
-from servora.deployment import (capture_app_state, image_status, check_app_updates,\n                                build_app_update_preview, update_app_images, load_app_state)
+from servora.deployment import (capture_app_state, image_status, check_app_updates,\n                                build_app_update_preview, update_app_images, load_app_state, save_app_state)
 
 
 class DeploymentPodman:
@@ -176,8 +176,7 @@ def _capture_multi_state(p, root):
     state = load_app_state(root)
     state["services"][1]["image_id"] = "sha256:backend-old"
     state["services"][1]["image_digest"] = "sha256:digest-backend-old"
-    save = __import__("servora.deployment", fromlist=["save_app_state"]).save_app_state
-    save(root, "stack", state)
+    save_app_state(root, "stack", state)
 
 
 def test_multi_service_update_recreates_only_changed_service(tmp_path):
@@ -218,7 +217,7 @@ def test_multi_service_update_failure_restores_only_changed_service(tmp_path):
     else:
         raise AssertionError("expected update failure")
 
-    assert p.containers["servora-stack-backend"]["image"] == "backend:latest" or p.containers["servora-stack-backend"]["image"] == "backend:old"
+    assert p.containers["servora-stack-backend"]["image"] == "sha256:backend-old"
     assert p.containers["servora-stack-db"]["image"] == "sha256:db"
     assert p.containers["servora-stack-frontend"]["image"] == "sha256:frontend"
     assert p.containers["servora-stack-db"]["running"] is True
