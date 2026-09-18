@@ -4,12 +4,13 @@
 
 Servora provides a simple UI and API for managing Podman containers, images, volumes, networks, applications, marketplace manifests, and AI-assisted container setup. It is designed for lightweight Linux systems, portable runtimes, and beginner-friendly homelab management without requiring a virtual machine.
 
-**Status:** Active development · **Current:** 0.1.9
+**Status:** Active development · **Current:** 0.1.12
 
 ## Highlights
 - Podman backend with container, image, volume, network, logs, inspect, stats, and lifecycle operations
 - Portable and user runtime modes
-- App manifest system with install, uninstall, update, dependencies, volumes, networks, ports, and rollback handling
+- App manifest system with install, uninstall, update, dependencies, volumes, networks, ports, and transactional rollback journals
+- Reliability scanning for corrupted state, missing/orphaned managed containers, runtime health, and operation history
 - Local marketplace foundation with `official`, `community`, and `ai_imported` entries
 - AI import pipeline with manifest validation and security risk scanning
 - OpenAI-compatible local/cloud AI provider abstraction
@@ -82,7 +83,6 @@ POST /api/ai/create
 
 ## Roadmap
 - App repository synchronization
-- Health checks and recovery workflows
 - Health checks and recovery workflows
 - Export/import bundles
 - Embedded Bare Server Browser renderer
