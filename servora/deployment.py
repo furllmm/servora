@@ -191,7 +191,7 @@ def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[s
             podman.create_container(plan(service, service.image))
             created.append(name)
 
-        for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+        for service in resolve_service_order(manifest):
             name = service_container_name(manifest.name, service.name)
             if name not in changed_names or not original_running.get(name):
                 continue
@@ -225,7 +225,7 @@ def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[s
                     pass
 
             # Restore the exact image IDs recorded before the update.
-            for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+            for service in resolve_service_order(manifest):
                 name = service_container_name(manifest.name, service.name)
                 if name not in changed_names:
                     continue
@@ -234,7 +234,7 @@ def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[s
                 if not old_image:
                     raise RuntimeError(f"No recorded image ID for rollback of {service.name}")
                 podman.create_container(plan(service, old_image))
-            for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+            for service in resolve_service_order(manifest):
                 name = service_container_name(manifest.name, service.name)
                 if name not in changed_names or not original_running.get(name):
                     continue
