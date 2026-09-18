@@ -4,6 +4,9 @@ import os
 import shutil
 import socket
 from pathlib import Path
+import json
+
+from .apps import AppManifestError, service_container_name, validate_app_manifest
 from typing import Any
 
 
@@ -92,3 +95,72 @@ def validate_runtime_state(root: str | Path) -> dict[str, Any]:
         except (OSError, ValueError):
             findings.append({"severity": "error", "code": "invalid_config", "message": "Servora config is unreadable or malformed"})
     return {"ok": not findings, "findings": findings}
+
+
+def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
+    """Inspect managed state without deleting or repairing anything."""
+    root = Path(root)
+    findings: list[dict[str, Any]] = []
+    managed_apps: dict[str, Any] = {}
+    apps_dir = root / "apps"
+    if apps_dir.exists():
+        for path in sorted(apps_dir.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                manifest = validate_app_manifest(raw)
+                managed_apps[manifest.name] = manifest
+            except (OSError, json.JSONDecodeError, AppManifestError) as exc:
+                findings.append({"severity": "error", "code": "corrupt_app_state",
+                                 "path": str(path), "message": str(exc)})
+
+    for path, label in [
+        (root / "config" / "recovery_policy.json", "recovery_policy"),
+        (root / "metadata" / "recovery_state.json", "recovery_state"),
+    ]:
+        if path.exists():
+            try:
+                json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                findings.append({"severity": "error", "code": "corrupt_state",
+                                 "path": str(path), "message": f"{label}: {exc}"})
+
+    audit_path = root / "logs" / "audit.jsonl"
+    if audit_path.exists():
+        try:
+            for line_no, line in enumerate(audit_path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip():
+                    try:
+                        json.loads(line)
+                    except json.JSONDecodeError:
+                        findings.append({"severity": "error", "code": "corrupt_audit_log",
+                                         "path": str(audit_path), "line": line_no,
+                                         "message": "invalid JSONL record"})
+        except OSError as exc:
+            findings.append({"severity": "error", "code": "state_read_error",
+                             "path": str(audit_path), "message": str(exc)})
+
+    containers = podman.list_containers(all=True)
+    expected = {
+        service_container_name(app.name, service.name)
+        for app in managed_apps.values()
+        for service in app.services
+    }
+    actual_managed = {
+        (item.get("Names") or item.get("Name") or item.get("name"))
+        for item in containers
+        if str(item.get("Names") or item.get("Name") or item.get("name") or "").startswith("servora-")
+    }
+    actual_managed.discard(None)
+    for name in sorted(actual_managed - expected):
+        findings.append({"severity": "warning", "code": "orphan_container",
+                         "name": name, "message": "Servora-prefixed container is not referenced by the app registry"})
+    for name in sorted(expected - actual_managed):
+        findings.append({"severity": "warning", "code": "missing_container",
+                         "name": name, "message": "App registry references a container that does not exist"})
+
+    return {
+        "ok": not any(x.get("severity") == "error" for x in findings),
+        "findings": findings,
+        "managed_apps": sorted(managed_apps),
+        "expected_containers": sorted(expected),
+    }
