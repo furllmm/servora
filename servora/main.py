@@ -276,14 +276,24 @@ class Handler(BaseHTTPRequestHandler):
                     preflight = preflight_manifest(p, manifest, runtime.root)
                     if not preflight["ok"]:
                         raise ReliabilityError(json.dumps(preflight))
-                    result = install_app(p, raw, transaction_root=runtime.root)
-                    app_store.save(manifest)
+                    try:
+                        result = install_app(p, raw, transaction_root=runtime.root)
+                        app_store.save(manifest)
+                    except Exception as exc:
+                        audit.append("app.install", "user", status="failed", name=manifest.name,
+                                     action="install", summary="Servora app install failed", reason=str(exc))
+                        raise
                     audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
                     return self._json({"app": manifest_to_dict(manifest), "created": result}, 201)
                 old = app_store.get(manifest.name)
                 if old is None:
                     raise AppManifestError("App is not installed")
-                result = update_app(p, old, raw, store=app_store)
+                try:
+                    result = update_app(p, old, raw, store=app_store)
+                except Exception as exc:
+                    audit.append("app.update", "user", status="failed", name=manifest.name,
+                                 action="update", summary="Servora app update failed", reason=str(exc))
+                    raise
                 audit.append("app.update", "user", name=manifest.name, action="update", summary="Servora app updated")
                 return self._json(result)
 
