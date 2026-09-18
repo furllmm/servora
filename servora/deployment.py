@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from .apps import AppManifest, service_container_name
+from .apps import AppManifest, service_container_name, resolve_service_order
 
 def _image_id(data: dict[str, Any]) -> str | None:
     value = data.get("Image") or data.get("ImageID") or data.get("ImageId")
@@ -111,6 +111,146 @@ def check_app_updates(podman, manifest: AppManifest, root: str | Path) -> dict[s
         "services": status["services"],
         "deployment_recorded": before_state is not None,
     }
+
+
+def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[str, Any]:
+    """Safely recreate only services whose recorded image has changed.
+
+    The update is image-focused: volumes, networks and the app manifest are
+    preserved. Only containers backed by a changed image are recreated.
+    The previous image IDs are retained for rollback.
+    """
+    state = load_app_state(root, manifest.name)
+    if not state:
+        raise ValueError("Deployment state is not recorded; automatic image update is unavailable")
+
+    status = image_status(podman, manifest, root)
+    if status["status"] in {"not_recorded", "unknown"}:
+        raise ValueError(f"Automatic image update requires a known deployment state: {status['status']}")
+
+    changed = [item for item in status["services"] if item["status"] == "update_available"]
+    if not changed:
+        return {
+            "app": manifest.name,
+            "version": manifest.version,
+            "status": "unchanged",
+            "updated_services": [],
+            "rollback": {"attempted": False, "success": None},
+        }
+
+    by_service = {service.name: service for service in manifest.services}
+    recorded = {item.get("service"): item for item in state.get("services", [])}
+    ordered = {service.name: index for index, service in enumerate(
+        resolve_service_order(manifest)
+    )}
+    changed.sort(key=lambda item: ordered[item["service"]])
+
+    original_running: dict[str, bool] = {}
+    for item in changed:
+        name = service_container_name(manifest.name, item["service"])
+        try:
+            original_running[name] = bool(podman.container_health(name).get("running"))
+        except Exception:
+            original_running[name] = False
+
+    def plan(service: Any, image: str) -> dict[str, Any]:
+        return {
+            "name": service_container_name(manifest.name, service.name),
+            "image": image,
+            "ports": service.ports,
+            "volumes": [
+                {"name": v.name, "container_path": v.container_path, "read_only": v.read_only}
+                for v in service.volumes
+            ],
+            "environment": service.environment,
+            "networks": service.networks,
+            "command": service.command,
+        }
+
+    changed_names = {service_container_name(manifest.name, item["service"]) for item in changed}
+    created: list[str] = []
+    started: list[str] = []
+    stopped: list[str] = []
+
+    try:
+        # Stop dependents first, then remove only changed containers.
+        for service in reversed(__import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest)):
+            name = service_container_name(manifest.name, service.name)
+            if name not in changed_names:
+                continue
+            if original_running.get(name):
+                podman.stop_container(name)
+                stopped.append(name)
+            podman.remove_container(name, force=True)
+
+        # Recreate dependency-first from the freshly refreshed image tags.
+        for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+            name = service_container_name(manifest.name, service.name)
+            if name not in changed_names:
+                continue
+            podman.create_container(plan(service, service.image))
+            created.append(name)
+
+        for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+            name = service_container_name(manifest.name, service.name)
+            if name not in changed_names or not original_running.get(name):
+                continue
+            podman.start_container(name)
+            started.append(name)
+            health = podman.container_health(name)
+            if health.get("status") in {"unhealthy", "dead", "exited", "stopped"}:
+                raise RuntimeError(f"Updated service {service.name} is not running: {health.get('status')}")
+
+        new_state = capture_app_state(podman, manifest, root)
+        return {
+            "app": manifest.name,
+            "version": manifest.version,
+            "status": "updated",
+            "updated_services": [item["service"] for item in changed],
+            "deployment": new_state,
+            "rollback": {"attempted": False, "success": None},
+        }
+    except Exception as update_error:
+        rollback = {"attempted": True, "success": False, "error": None}
+        try:
+            for name in reversed(started):
+                try:
+                    podman.stop_container(name)
+                except Exception:
+                    pass
+            for name in reversed(created):
+                try:
+                    podman.remove_container(name, force=True)
+                except Exception:
+                    pass
+
+            # Restore the exact image IDs recorded before the update.
+            for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+                name = service_container_name(manifest.name, service.name)
+                if name not in changed_names:
+                    continue
+                old = recorded.get(service.name) or {}
+                old_image = old.get("image_id")
+                if not old_image:
+                    raise RuntimeError(f"No recorded image ID for rollback of {service.name}")
+                podman.create_container(plan(service, old_image))
+            for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+                name = service_container_name(manifest.name, service.name)
+                if name not in changed_names or not original_running.get(name):
+                    continue
+                podman.start_container(name)
+                health = podman.container_health(name)
+                if health.get("status") in {"unhealthy", "dead", "exited", "stopped"}:
+                    raise RuntimeError(f"Rollback service {service.name} is not running: {health.get('status')}")
+
+            # Do not overwrite the recorded deployment state until an update
+            # succeeds; it therefore remains a record of the pre-update image.
+            rollback["success"] = True
+        except Exception as rollback_error:
+            rollback["error"] = str(rollback_error)
+        raise RuntimeError(
+            f"Image update failed; rollback {'succeeded' if rollback['success'] else 'failed'}: {update_error}"
+        ) from update_error
 
 def build_app_update_preview(podman, manifest: AppManifest, root: str | Path) -> dict[str, Any]:
     """Build a read-only update plan from recorded and current image state.
