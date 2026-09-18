@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -110,6 +111,15 @@ class Handler(BaseHTTPRequestHandler):
                 if app is None:
                     return self._json({"error": "app not found"}, 404)
                 return self._json(manifest_to_dict(app))
+            if parsed.path == "/api/storage":
+                usage = shutil.disk_usage(runtime.root)
+                return self._json({
+                    "path": str(runtime.root),
+                    "total_bytes": usage.total,
+                    "used_bytes": usage.total - usage.free,
+                    "free_bytes": usage.free,
+                })
+
             if parsed.path == "/api/containers":
                 return self._json(p.list_containers())
             if parsed.path == "/api/images":
