@@ -97,6 +97,49 @@ class Podman:
         except (json.JSONDecodeError, IndexError, TypeError) as exc:
             raise PodmanError("Podman returned invalid image inspect data") from exc
 
+    def image_metadata(self, name: str) -> dict[str, Any]:
+        """Return stable, UI/API-safe metadata for a local image."""
+        data = self.inspect_image(name)
+        repo_tags = data.get("RepoTags") or data.get("Names") or []
+        repo_digests = data.get("RepoDigests") or []
+        if isinstance(repo_tags, str):
+            repo_tags = [repo_tags]
+        if isinstance(repo_digests, str):
+            repo_digests = [repo_digests]
+        image_id = data.get("Id") or data.get("ID") or data.get("Image")
+        digest = data.get("Digest")
+        if not digest and repo_digests:
+            digest = str(repo_digests[0]).split("@", 1)[1] if "@" in str(repo_digests[0]) else None
+        return {
+            "name": name,
+            "id": image_id,
+            "digest": digest,
+            "repo_tags": [str(x) for x in repo_tags],
+            "repo_digests": [str(x) for x in repo_digests],
+            "created": data.get("Created"),
+            "size": data.get("Size"),
+        }
+
+    def refresh_image(self, name: str) -> dict[str, Any]:
+        """Pull a tag/reference and report whether its resolved local image changed."""
+        before = None
+        try:
+            before = self.image_metadata(name)
+        except PodmanError:
+            pass
+        result = self.pull_image(name)
+        after = self.image_metadata(name)
+        changed = bool(before and (before.get("id") or before.get("digest")) !=
+                       (after.get("id") or after.get("digest")))
+        return {
+            "name": name,
+            "status": "updated" if changed else ("unchanged" if before else "pulled"),
+            "changed": changed,
+            "before": before,
+            "after": after,
+            "result": result,
+        }
+
     def inspect_network(self, name: str) -> dict[str, Any]:
         result = self._run("network", "inspect", name)
         try:
