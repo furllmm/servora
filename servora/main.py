@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
+from .deployment import capture_app_state, image_status
                    uninstall_app, update_app, validate_app_manifest, app_health, start_app, stop_app, restart_app)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
@@ -105,6 +106,12 @@ class Handler(BaseHTTPRequestHandler):
                 if entry is None:
                     return self._json({"error": "marketplace app not found"}, 404)
                 return self._json(entry.to_dict())
+            if parsed.path == "/api/apps/image-status":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                app = app_store.get(name)
+                if app is None:
+                    return self._json({"error": "app not found"}, 404)
+                return self._json(image_status(p, app, runtime.root))
             if parsed.path == "/api/apps/health":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 app = app_store.get(name)
@@ -405,17 +412,19 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         result = install_app(p, raw, transaction_root=runtime.root)
                         app_store.save(manifest)
+                        deployment = capture_app_state(p, manifest, runtime.root)
                     except Exception as exc:
                         audit.append("app.install", "user", status="failed", name=manifest.name,
                                      action="install", summary="Servora app install failed", reason=str(exc))
                         raise
                     audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
-                    return self._json({"app": manifest_to_dict(manifest), "created": result}, 201)
+                    return self._json({"app": manifest_to_dict(manifest), "created": result, "deployment": deployment}, 201)
                 old = app_store.get(manifest.name)
                 if old is None:
                     raise AppManifestError("App is not installed")
                 try:
                     result = update_app(p, old, raw, store=app_store, transaction_root=runtime.root)
+                deployment = capture_app_state(p, manifest, runtime.root)
                 except Exception as exc:
                     audit.append("app.update", "user", status="failed", name=manifest.name,
                                  action="update", summary="Servora app update failed", reason=str(exc))
