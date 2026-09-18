@@ -123,3 +123,52 @@ def test_dependency_cycle_reports_path():
     ]})
     with pytest.raises(AppManifestError, match="web -> db -> web"):
         resolve_service_order(m)
+
+class StackPodman:
+    def __init__(self, present):
+        self.present = set(present)
+        self.calls = []
+    def list_containers(self, all=True):
+        return [{"Names": [name]} for name in sorted(self.present)]
+    def start_container(self, name):
+        self.calls.append(("start", name)); return "started"
+    def stop_container(self, name):
+        self.calls.append(("stop", name)); return "stopped"
+
+def _stack_manifest():
+    return validate_app_manifest({"name":"demo","version":"1","services":[
+        {"name":"web","image":"nginx","depends_on":["db"]},
+        {"name":"db","image":"postgres"},
+        {"name":"cache","image":"redis"},
+    ]})
+
+def test_start_app_uses_dependency_first_order():
+    from servora.apps import start_app
+    p = StackPodman({"servora-demo-web","servora-demo-db","servora-demo-cache"})
+    result = start_app(p, _stack_manifest())
+    assert result["status"] == "ok"
+    assert p.calls == [("start","servora-demo-cache"),("start","servora-demo-db"),("start","servora-demo-web")]
+
+def test_stop_app_uses_reverse_dependency_order():
+    from servora.apps import stop_app
+    p = StackPodman({"servora-demo-web","servora-demo-db","servora-demo-cache"})
+    result = stop_app(p, _stack_manifest())
+    assert result["status"] == "ok"
+    assert p.calls == [("stop","servora-demo-web"),("stop","servora-demo-db"),("stop","servora-demo-cache")]
+
+def test_restart_app_stops_then_starts_with_stack_order():
+    from servora.apps import restart_app
+    p = StackPodman({"servora-demo-web","servora-demo-db","servora-demo-cache"})
+    result = restart_app(p, _stack_manifest())
+    assert result["status"] == "ok"
+    assert p.calls == [
+        ("stop","servora-demo-web"),("stop","servora-demo-db"),("stop","servora-demo-cache"),
+        ("start","servora-demo-cache"),("start","servora-demo-db"),("start","servora-demo-web")
+    ]
+
+def test_app_operation_reports_missing_container():
+    from servora.apps import start_app
+    p = StackPodman({"servora-demo-db"})
+    result = start_app(p, _stack_manifest())
+    assert result["status"] == "partial"
+    assert {x["service"] for x in result["services"] if x["status"] == "missing"} == {"web","cache"}
