@@ -29,3 +29,33 @@ def test_runtime_state_detects_missing_path(tmp_path: Path):
     result = validate_runtime_state(tmp_path)
     assert result["ok"] is False
     assert any(x["code"] == "missing_runtime_path" for x in result["findings"])
+
+
+class ScanPodman:
+    def list_containers(self, all=True):
+        return [{"Names": ["servora-demo-web"]}, {"Names": ["servora-orphan-web"]}]
+
+
+def test_scan_detects_orphan_and_missing(tmp_path):
+    from servora.reliability import scan_reliability
+    (tmp_path / "apps").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "metadata").mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "apps" / "demo.json").write_text(
+        '{"name":"demo","version":"1","services":[{"name":"web","image":"nginx"}]}'
+    )
+    result = scan_reliability(ScanPodman(), tmp_path)
+    codes = {x["code"] for x in result["findings"]}
+    assert "orphan_container" in codes
+    assert "missing_container" not in codes
+
+
+def test_scan_detects_corrupt_app_state(tmp_path):
+    from servora.reliability import scan_reliability
+    (tmp_path / "apps").mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "apps" / "broken.json").write_text("{broken")
+    result = scan_reliability(ScanPodman(), tmp_path)
+    assert result["ok"] is False
+    assert any(x["code"] == "corrupt_app_state" for x in result["findings"])
