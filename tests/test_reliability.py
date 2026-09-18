@@ -59,3 +59,31 @@ def test_scan_detects_corrupt_app_state(tmp_path):
     result = scan_reliability(ScanPodman(), tmp_path)
     assert result["ok"] is False
     assert any(x["code"] == "corrupt_app_state" for x in result["findings"])
+
+
+class RepairPodman(ScanPodman):
+    def __init__(self):
+        self.removed = []
+
+    def remove_container(self, name, force=False):
+        self.removed.append((name, force))
+        return name
+
+    def list_containers(self, all=True):
+        return [{"Names": ["servora-orphan-web"]}]
+
+
+def test_repair_requires_approval(tmp_path):
+    from servora.reliability import repair_reliability
+    result = repair_reliability(RepairPodman(), tmp_path, "remove_orphan_container",
+                                name="servora-orphan-web", approved=False)
+    assert result["status"] == "approval_required"
+
+
+def test_repair_removes_detected_orphan(tmp_path):
+    from servora.reliability import repair_reliability
+    p = RepairPodman()
+    result = repair_reliability(p, tmp_path, "remove_orphan_container",
+                                name="servora-orphan-web", approved=True)
+    assert result["status"] == "repaired"
+    assert p.removed == [("servora-orphan-web", True)]
