@@ -212,6 +212,50 @@ def resolve_service_order(manifest: AppManifest) -> list[AppService]:
     return order
 
 
+def _resource_users(info: Any) -> set[str]:
+    """Extract container names/IDs referenced by a Podman resource inspect result."""
+    users: set[str] = set()
+    if isinstance(info, dict):
+        for key, value in info.items():
+            if key in {"Name", "Names"}:
+                if isinstance(value, list):
+                    users.update(str(x) for x in value if x)
+                elif value:
+                    users.add(str(value))
+            elif key == "Containers" and isinstance(value, dict):
+                for container_id, details in value.items():
+                    if isinstance(details, dict):
+                        name = details.get("Name") or details.get("Names")
+                        if isinstance(name, list):
+                            users.update(str(x) for x in name if x)
+                        elif name:
+                            users.add(str(name))
+                    elif container_id:
+                        users.add(str(container_id))
+            else:
+                users.update(_resource_users(value))
+    elif isinstance(info, list):
+        for item in info:
+            users.update(_resource_users(item))
+    return users
+
+
+def _check_resource_conflict(podman, resource_type: str, name: str, app_name: str) -> None:
+    inspect = getattr(podman, f"inspect_{resource_type}", None)
+    if inspect is None:
+        return
+    try:
+        info = inspect(name)
+    except Exception:
+        return
+    prefix = f"servora-{app_name}-"
+    conflicts = sorted(x for x in _resource_users(info) if x and not x.startswith(prefix))
+    if conflicts:
+        raise AppManifestError(
+            f"{resource_type.capitalize()} '{name}' is already used by another container: {conflicts[0]}"
+        )
+
+
 def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
     """Create an app stack with a persistent rollback journal.
@@ -233,6 +277,8 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                 podman.create_network(network)
                 if tx:
                     tx.record("networks", network)
+            else:
+                _check_resource_conflict(podman, "network", network, manifest.name)
 
         existing_volumes = {
             (x.get("Name") or x.get("name")) for x in podman.list_volumes()
@@ -243,6 +289,8 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                 podman.create_volume(volume)
                 if tx:
                     tx.record("volumes", volume)
+            else:
+                _check_resource_conflict(podman, "volume", volume, manifest.name)
 
         for service in resolve_service_order(manifest):
             name = service_container_name(manifest.name, service.name)
