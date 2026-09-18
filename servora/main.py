@@ -22,6 +22,7 @@ from .server_browser import BareServerBrowser, validate_server_url
 from .audit import AuditLog, AuditError
 from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state, scan_reliability, repair_reliability
 from .transaction import list_operations
+from .backup import BackupError, create_backup, restore_preview
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
 MODE = os.environ.get("SERVORA_MODE", "user")
@@ -139,6 +140,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(scan)
             if parsed.path == "/api/reliability/scan":
                 return self._json(scan_reliability(p, runtime.root))
+            if parsed.path == "/api/backups":
+                backups = []
+                for item in sorted(runtime.backups.glob("*.srv.zst")):
+                    try:
+                        backups.append({"name": item.name, "path": str(item), "size_bytes": item.stat().st_size, "modified": item.stat().st_mtime})
+                    except OSError:
+                        continue
+                return self._json(backups)
+            if parsed.path == "/api/backups/preview":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                if not name.endswith(".srv.zst") or Path(name).name != name:
+                    raise BackupError("Invalid backup name")
+                path = runtime.backups / name
+                return self._json(restore_preview(path))
             if parsed.path == "/api/audit":
                 q = parse_qs(parsed.query)
                 return self._json(audit.read(int(q.get("limit", [100])[0]), event=q.get("event", [None])[0], name=q.get("name", [None])[0]))
@@ -167,11 +182,22 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
                 raw = json.loads(self.rfile.read(length))
+                if parsed.path == "/api/backups/export":
+                    include_volumes = bool(raw.get("include_volumes", True)) if isinstance(raw, dict) else True
+                    requested = raw.get("name") if isinstance(raw, dict) else None
+                    if requested is None:
+                        requested = "servora-backup.srv.zst"
+                    name = Path(str(requested)).name
+                    if name != str(requested) or not name.endswith(".srv.zst"):
+                        raise BackupError("Backup name must be a simple .srv.zst filename")
+                    result = create_backup(runtime.root, runtime.backups / name, p, include_volumes=include_volumes)
+                    audit.append("backup.export", "user", action="export", summary="Servora backup created", details={"size_bytes": result["size_bytes"], "sha256": result["sha256"], "volumes_included": include_volumes})
+                    return self._json(result, 201)
                 if parsed.path == "/api/ai/plan":
                     prompt = raw.get("prompt") if isinstance(raw, dict) else None
                     provider = provider_from_env()
@@ -333,7 +359,7 @@ class Handler(BaseHTTPRequestHandler):
             result = action(name)
             audit.append("container.action", "user", name=name, action=parsed.path.rsplit("/", 1)[-1], summary="Container action executed")
             return self._json({"name": name, "result": result})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError, ReliabilityError) as exc:
+        except (ValueError, BackupError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError, ReliabilityError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
