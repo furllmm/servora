@@ -174,7 +174,7 @@ def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[s
 
     try:
         # Stop dependents first, then remove only changed containers.
-        for service in reversed(__import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest)):
+        for service in reversed(resolve_service_order(manifest)):
             name = service_container_name(manifest.name, service.name)
             if name not in changed_names:
                 continue
@@ -184,7 +184,7 @@ def update_app_images(podman, manifest: AppManifest, root: str | Path) -> dict[s
             podman.remove_container(name, force=True)
 
         # Recreate dependency-first from the freshly refreshed image tags.
-        for service in __import__("servora.apps", fromlist=["resolve_service_order"]).resolve_service_order(manifest):
+        for service in resolve_service_order(manifest):
             name = service_container_name(manifest.name, service.name)
             if name not in changed_names:
                 continue
