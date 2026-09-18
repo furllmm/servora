@@ -152,7 +152,13 @@ class Handler(BaseHTTPRequestHandler):
                     prompt = raw.get("prompt") if isinstance(raw, dict) else None
                     approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
                     provider = provider_from_env()
-                    plan = create_container_plan(provider, prompt)
+                    supplied_plan = raw.get("plan") if isinstance(raw, dict) else None
+                    if supplied_plan is not None:
+                        plan = supplied_plan
+                        if not isinstance(plan, dict):
+                            raise AIPlanError("plan must be an object")
+                    else:
+                        plan = create_container_plan(provider, prompt)
                     manifest, findings, requires_approval = analyze_plan(plan)
                     response = {
                         "provider": provider.name,
