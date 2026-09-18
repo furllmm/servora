@@ -144,10 +144,33 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
     for key in ("name", "image"):
         if not isinstance(plan.get(key), str) or not plan[key].strip():
             raise AIPlanError(f"Missing {key}")
-    if len(plan["name"]) > 128 or any(c in plan["name"] for c in "\x00\n\r"):
+    if len(plan["name"]) > 64 or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", plan["name"]):
         raise AIPlanError("Invalid container name")
-    if len(plan["image"]) > 512 or any(c.isspace() for c in plan["image"]):
+    if len(plan["image"]) > 512 or any(c.isspace() or c == "\x00" for c in plan["image"]):
         raise AIPlanError("Invalid image reference")
+
+    for key in ("ports", "volumes", "networks", "command"):
+        if key in plan and not isinstance(plan[key], list):
+            raise AIPlanError(f"{key} must be a list")
+    if "environment" in plan and not isinstance(plan["environment"], dict):
+        raise AIPlanError("environment must be an object")
+    for port in plan.get("ports", []):
+        if not isinstance(port, dict):
+            raise AIPlanError("port must be an object")
+    for item in plan.get("volumes", []):
+        if not (isinstance(item, str) or isinstance(item, dict)):
+            raise AIPlanError("volume must be an object or string")
+    for network in plan.get("networks", []):
+        if not isinstance(network, str):
+            raise AIPlanError("network must be a string")
+    for command in plan.get("command", []):
+        if not isinstance(command, str) or "\x00" in command:
+            raise AIPlanError("command must contain strings without NUL bytes")
+
+    forbidden = {"privileged", "network_mode", "devices", "cap_add", "cap_drop", "security_opt", "pid", "ipc", "uts", "userns", "host_mounts", "docker_socket", "podman_socket"}
+    requested = forbidden.intersection(plan)
+    if requested:
+        raise AIPlanError(f"Unsupported privileged host configuration: {sorted(requested)[0]}")
     return plan
 
 
