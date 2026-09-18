@@ -83,15 +83,6 @@ class Handler(BaseHTTPRequestHandler):
                     "reliability": state,
                 })
 
-            if parsed.path == "/api/reliability":
-                scan = scan_reliability(p, runtime.root)
-                scan["runtime"] = validate_runtime_state(runtime.root)
-                scan["operations"] = list_operations(runtime.root)
-                return self._json(scan)
-
-            if parsed.path == "/api/reliability/scan":
-                return self._json(scan_reliability(p, runtime.root))
-
             if parsed.path == "/api/podman/help":
                 return self._json({"detected": Podman.detect() is not None, "install": Podman.install_help()})
 
@@ -144,7 +135,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/reliability":
                 scan = scan_reliability(p, runtime.root)
                 scan["runtime"] = validate_runtime_state(runtime.root)
+                scan["operations"] = list_operations(runtime.root)
                 return self._json(scan)
+            if parsed.path == "/api/reliability/scan":
+                return self._json(scan_reliability(p, runtime.root))
             if parsed.path == "/api/audit":
                 q = parse_qs(parsed.query)
                 return self._json(audit.read(int(q.get("limit", [100])[0]), event=q.get("event", [None])[0], name=q.get("name", [None])[0]))
