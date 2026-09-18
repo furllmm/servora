@@ -59,6 +59,7 @@ def image_status(podman, manifest: AppManifest, root: str | Path) -> dict[str, A
                          "current_image_id": current, "status": status})
     overall = ("update_available" if any(x["status"] == "update_available" for x in services)
                else "unknown" if any(x["status"] == "unknown" for x in services)
+               else "not_recorded" if any(x["status"] == "not_recorded" for x in services)
                else "current")
     return {"app": manifest.name, "version": manifest.version,
             "status": overall, "services": services}
