@@ -15,7 +15,7 @@ from .marketplace_seed import DEMO
 from .ai_import import AIImportError, import_source
 from .ai import AIPlanError, create_container_plan, provider_from_env
 from .ai_execution import analyze_plan, execute_plan
-from .troubleshooting import collect_container_diagnostics, troubleshoot_container
+from .troubleshooting import TroubleshootingError, collect_container_diagnostics, troubleshoot_container
 from .server_browser import BareServerBrowser, validate_server_url
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -245,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             if action is None:
                 return self._json({"error": "not found"}, 404)
             return self._json({"name": name, "result": action(name)})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, __import__('servora.troubleshooting', fromlist=['TroubleshootingError']).TroubleshootingError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
