@@ -341,14 +341,15 @@ def uninstall_app(podman, manifest: AppManifest, *, remove_volumes: bool = False
 
 
 def update_app(podman, old_manifest: AppManifest, raw_manifest: dict[str, Any], *,
-               store: AppStore | None = None, check_ports: bool = True) -> dict[str, Any]:
+               store: AppStore | None = None, check_ports: bool = True,
+               transaction_root: str | Path | None = None) -> dict[str, Any]:
     """Best-effort transactional update: old definition is restored if new install fails."""
     new_manifest = validate_app_manifest(raw_manifest)
     if new_manifest.name != old_manifest.name:
         raise AppManifestError("App name cannot change during update")
     uninstall_app(podman, old_manifest)
     try:
-        created = install_app(podman, raw_manifest, check_ports=check_ports)
+        created = install_app(podman, raw_manifest, check_ports=check_ports, transaction_root=transaction_root)
         if store:
             store.save(new_manifest)
         return {"app": manifest_to_dict(new_manifest), "created": created, "updated": True,
@@ -356,7 +357,7 @@ def update_app(podman, old_manifest: AppManifest, raw_manifest: dict[str, Any], 
     except Exception as update_error:
         rollback = {"attempted": True, "success": False, "error": None}
         try:
-            install_app(podman, manifest_to_dict(old_manifest), check_ports=check_ports)
+            install_app(podman, manifest_to_dict(old_manifest), check_ports=check_ports, transaction_root=transaction_root)
             if store:
                 store.save(old_manifest)
             rollback["success"] = True
