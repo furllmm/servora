@@ -196,6 +196,59 @@ def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
     }
 
 
+
+def validate_backup_artifact(path: str | Path, *, checksum: str | None = None) -> dict[str, Any]:
+    """Validate a Servora backup artifact without extracting or modifying it."""
+    artifact = Path(path)
+    findings: list[dict[str, Any]] = []
+    if not artifact.exists() or not artifact.is_file():
+        return {"ok": False, "findings": [{"severity": "error", "code": "backup_missing", "message": "Backup artifact does not exist"}]}
+    if artifact.stat().st_size == 0:
+        findings.append({"severity": "error", "code": "backup_empty", "message": "Backup artifact is empty"})
+
+    if checksum is not None:
+        import hashlib
+        if len(checksum) != 64 or any(c not in "0123456789abcdefABCDEF" for c in checksum):
+            findings.append({"severity": "error", "code": "invalid_checksum", "message": "Checksum must be a SHA-256 hex digest"})
+        else:
+            digest = hashlib.sha256()
+            try:
+                with artifact.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest().lower() != checksum.lower():
+                    findings.append({"severity": "error", "code": "checksum_mismatch", "message": "Backup checksum does not match"})
+            except OSError as exc:
+                findings.append({"severity": "error", "code": "backup_read_error", "message": str(exc)})
+
+    suffixes = artifact.name.lower()
+    if suffixes.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")):
+        import tarfile
+        try:
+            with tarfile.open(artifact, mode="r:*") as archive:
+                members = archive.getmembers()
+                for member in members:
+                    member_path = Path(member.name)
+                    if member.name.startswith("/") or ".." in member_path.parts:
+                        findings.append({"severity": "error", "code": "unsafe_backup_path", "member": member.name, "message": "Backup contains a path traversal entry"})
+                        break
+                if not members:
+                    findings.append({"severity": "error", "code": "backup_empty_archive", "message": "Backup archive contains no entries"})
+        except (OSError, tarfile.TarError) as exc:
+            findings.append({"severity": "error", "code": "invalid_backup_archive", "message": str(exc)})
+    elif suffixes.endswith(".zst"):
+        import subprocess
+        try:
+            result = subprocess.run(["zstd", "-t", str(artifact)], capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                findings.append({"severity": "error", "code": "invalid_backup_compression", "message": result.stderr.strip() or "zstd validation failed"})
+        except (OSError, subprocess.SubprocessError) as exc:
+            findings.append({"severity": "error", "code": "backup_validator_unavailable", "message": "zstd validation tool is unavailable or failed", "error": str(exc)})
+    else:
+        findings.append({"severity": "warning", "code": "unknown_backup_format", "message": "Backup format is not recognized"})
+
+    return {"ok": not any(x.get("severity") == "error" for x in findings), "findings": findings, "path": str(artifact), "size_bytes": artifact.stat().st_size}
+
 def repair_reliability(podman, root: str | Path, action: str, *, name: str,
                        approved: bool = False) -> dict[str, Any]:
     """Perform one narrowly-scoped reliability repair after explicit approval."""
