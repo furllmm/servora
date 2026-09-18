@@ -6,6 +6,8 @@ from typing import Any
 import json
 from pathlib import Path
 
+from .transaction import ResourceTransaction
+
 
 class AppManifestError(ValueError):
     pass
@@ -187,21 +189,37 @@ def service_container_name(app_name: str, service_name: str) -> str:
     return f"servora-{app_name}-{service_name}"
 
 
-def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True) -> list[dict[str, Any]]:
-    """Create an app stack in dependency order. No implicit image pull is performed."""
+def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
+               transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
+    """Create an app stack with a persistent rollback journal.
+
+    Only networks/volumes/containers created by this operation are rolled back.
+    Existing shared resources are preserved.
+    """
     manifest = validate_app_manifest(raw_manifest)
+    tx = ResourceTransaction(transaction_root, "install", name=manifest.name) if transaction_root else None
     created: list[str] = []
     results: list[dict[str, Any]] = []
     try:
+        existing_networks = {
+            (x.get("Name") or x.get("name")) for x in podman.list_networks()
+        }
         all_networks = sorted({n for s in manifest.services for n in s.networks})
         for network in all_networks:
-            if not any((x.get("Name") or x.get("name")) == network for x in podman.list_networks()):
+            if network not in existing_networks:
                 podman.create_network(network)
+                if tx:
+                    tx.record("networks", network)
 
+        existing_volumes = {
+            (x.get("Name") or x.get("name")) for x in podman.list_volumes()
+        }
         all_volumes = sorted({v.name for s in manifest.services for v in s.volumes})
         for volume in all_volumes:
-            if not any((x.get("Name") or x.get("name")) == volume for x in podman.list_volumes()):
+            if volume not in existing_volumes:
                 podman.create_volume(volume)
+                if tx:
+                    tx.record("volumes", volume)
 
         pending = list(manifest.services)
         while pending:
@@ -225,17 +243,24 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True) 
                 }
                 result = podman.create_container(plan)
                 created.append(name)
+                if tx:
+                    tx.record("containers", name)
                 results.append({"service": service.name, "container": name, "result": result})
                 pending.remove(service)
                 progress = True
             if not progress:
                 raise AppManifestError("Circular service dependency")
+        if tx:
+            tx.commit()
     except Exception:
-        for name in reversed(created):
-            try:
-                podman.remove_container(name, force=True)
-            except Exception:
-                pass
+        if tx:
+            tx.rollback(podman)
+        else:
+            for name in reversed(created):
+                try:
+                    podman.remove_container(name, force=True)
+                except Exception:
+                    pass
         raise
     return results
 
@@ -326,13 +351,15 @@ def update_app(podman, old_manifest: AppManifest, raw_manifest: dict[str, Any], 
         created = install_app(podman, raw_manifest, check_ports=check_ports)
         if store:
             store.save(new_manifest)
-        return {"app": manifest_to_dict(new_manifest), "created": created, "updated": True}
-    except Exception:
+        return {"app": manifest_to_dict(new_manifest), "created": created, "updated": True,
+                "rollback": {"attempted": False, "success": None}}
+    except Exception as update_error:
+        rollback = {"attempted": True, "success": False, "error": None}
         try:
             install_app(podman, manifest_to_dict(old_manifest), check_ports=check_ports)
             if store:
                 store.save(old_manifest)
-        except Exception:
-            # The caller gets the original update failure; recovery status is surfaced.
-            pass
-        raise
+            rollback["success"] = True
+        except Exception as restore_error:
+            rollback["error"] = str(restore_error)
+        raise AppManifestError(f"Update failed; rollback {'succeeded' if rollback['success'] else 'failed'}: {update_error}") from update_error
