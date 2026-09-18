@@ -1,5 +1,5 @@
 import pytest
-from servora.apps import AppManifestError, manifest_to_dict, service_container_name, validate_app_manifest
+from servora.apps import AppManifestError, manifest_to_dict, service_container_name, validate_app_manifest, resolve_service_order
 
 
 def test_manifest_roundtrip():
@@ -105,3 +105,21 @@ def test_app_health_aggregates_services():
     result = app_health(HealthPodman(), m)
     assert result["status"] == "healthy"
     assert [x["service"] for x in result["services"]] == ["db", "web"]
+
+
+def test_dependency_order_is_deterministic():
+    m = validate_app_manifest({"name":"demo","version":"1","services":[
+        {"name":"web","image":"nginx","depends_on":["db"]},
+        {"name":"db","image":"postgres"},
+        {"name":"cache","image":"redis"},
+    ]})
+    assert [s.name for s in resolve_service_order(m)] == ["cache", "db", "web"]
+
+
+def test_dependency_cycle_reports_path():
+    m = validate_app_manifest({"name":"demo","version":"1","services":[
+        {"name":"web","image":"nginx","depends_on":["db"]},
+        {"name":"db","image":"postgres","depends_on":["web"]},
+    ]})
+    with pytest.raises(AppManifestError, match="web -> db -> web"):
+        resolve_service_order(m)
