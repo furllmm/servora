@@ -22,7 +22,7 @@ from .server_browser import BareServerBrowser, validate_server_url
 from .audit import AuditLog, AuditError
 from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state, scan_reliability, repair_reliability
 from .transaction import list_operations
-from .backup import BackupError, create_backup, restore_preview
+from .backup import BackupError, create_backup, restore_preview, restore_conflicts, restore_backup
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
 MODE = os.environ.get("SERVORA_MODE", "user")
@@ -148,11 +148,16 @@ class Handler(BaseHTTPRequestHandler):
                     except OSError:
                         continue
                 return self._json(backups)
-            if parsed.path == "/api/backups/preview":
+            if parsed.path in ("/api/backups/preview", "/api/backups/restore-preview"):
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 if not name.endswith(".srv.zst") or Path(name).name != name:
                     raise BackupError("Invalid backup name")
                 path = runtime.backups / name
+                if parsed.path == "/api/backups/restore-preview":
+                    return self._json({
+                        "preview": restore_preview(path),
+                        "restore": restore_conflicts(path, runtime.root, p),
+                    })
                 return self._json(restore_preview(path))
             if parsed.path == "/api/audit":
                 q = parse_qs(parsed.query)
@@ -182,11 +187,36 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/backups/export", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
                 raw = json.loads(self.rfile.read(length))
+                if parsed.path == "/api/backups/restore":
+                    requested = raw.get("name") if isinstance(raw, dict) else None
+                    approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
+                    mode = raw.get("mode", "safe") if isinstance(raw, dict) else "safe"
+                    if requested is None:
+                        raise BackupError("Backup name is required")
+                    name = Path(str(requested)).name
+                    if name != str(requested) or not name.endswith(".srv.zst"):
+                        raise BackupError("Backup name must be a simple .srv.zst filename")
+                    result = restore_backup(
+                        runtime.backups / name,
+                        runtime.root,
+                        p,
+                        approved=approved,
+                        mode=mode,
+                    )
+                    audit.append(
+                        "backup.restore",
+                        "user",
+                        action="restore",
+                        summary="Servora backup restored",
+                        details={"backup": name, "apps": result.get("apps", []), "mode": mode},
+                    )
+                    return self._json(result, 201)
+
                 if parsed.path == "/api/backups/export":
                     include_volumes = bool(raw.get("include_volumes", True)) if isinstance(raw, dict) else True
                     requested = raw.get("name") if isinstance(raw, dict) else None
