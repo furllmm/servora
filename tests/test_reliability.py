@@ -113,3 +113,43 @@ def test_preflight_rejects_negative_disk_threshold(tmp_path: Path):
         assert "non-negative" in str(exc)
     else:
         raise AssertionError("negative threshold must fail")
+
+
+def test_validate_backup_tar_and_checksum(tmp_path: Path):
+    import hashlib
+    import tarfile
+    source = tmp_path / "data.txt"
+    source.write_text("servora", encoding="utf-8")
+    archive = tmp_path / "backup.tar"
+    with tarfile.open(archive, "w") as tar:
+        tar.add(source, arcname="data/data.txt")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    from servora.reliability import validate_backup_artifact
+    result = validate_backup_artifact(archive, checksum=digest)
+    assert result["ok"] is True
+
+
+def test_validate_backup_rejects_traversal(tmp_path: Path):
+    import io
+    import tarfile
+    archive = tmp_path / "bad.tar"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo("../escape.txt")
+        data = b"bad"
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    from servora.reliability import validate_backup_artifact
+    result = validate_backup_artifact(archive)
+    assert result["ok"] is False
+    assert any(x["code"] == "unsafe_backup_path" for x in result["findings"])
+
+
+def test_validate_backup_checksum_mismatch(tmp_path: Path):
+    archive = tmp_path / "backup.tar"
+    archive.write_bytes(b"not-a-real-tar")
+    from servora.reliability import validate_backup_artifact
+    result = validate_backup_artifact(archive, checksum="0" * 64)
+    assert result["ok"] is False
+    codes = {x["code"] for x in result["findings"]}
+    assert "checksum_mismatch" in codes
+    assert "invalid_backup_archive" in codes
