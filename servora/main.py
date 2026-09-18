@@ -16,6 +16,7 @@ from .ai_import import AIImportError, import_source
 from .ai import AIPlanError, create_container_plan, provider_from_env
 from .ai_execution import analyze_plan, execute_plan
 from .troubleshooting import TroubleshootingError, collect_container_diagnostics, troubleshoot_container
+from .recovery import RecoveryError, execute_recovery
 from .server_browser import BareServerBrowser, validate_server_url
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -146,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot"}:
+            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -179,6 +180,16 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"status": "approval_required", **response}, 409)
                     result = execute_plan(p, manifest)
                     return self._json({"status": "launched", **response, "result": result}, 201)
+
+                if parsed.path == "/api/ai/recover":
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    action = raw.get("action") if isinstance(raw, dict) else None
+                    if not isinstance(action, dict):
+                        raise RecoveryError("action must be an object")
+                    if not bool(raw.get("approved", False)):
+                        return self._json({"status": "approval_required", "name": name, "action": action}, 409)
+                    result = execute_recovery(p, name, action)
+                    return self._json({"status": "recovered", "result": result})
 
                 if parsed.path == "/api/ai/troubleshoot":
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
@@ -245,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
             if action is None:
                 return self._json({"error": "not found"}, 404)
             return self._json({"name": name, "result": action(name)})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
