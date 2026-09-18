@@ -145,11 +145,13 @@ def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
         for app in managed_apps.values()
         for service in app.services
     }
-    actual_managed = {
-        (item.get("Names") or item.get("Name") or item.get("name"))
-        for item in containers
-        if str(item.get("Names") or item.get("Name") or item.get("name") or "").startswith("servora-")
-    }
+    actual_managed = set()
+    for item in containers:
+        raw_name = item.get("Names") or item.get("Name") or item.get("name")
+        names = raw_name if isinstance(raw_name, list) else [raw_name]
+        for raw in names:
+            if isinstance(raw, str) and raw.startswith("servora-"):
+                actual_managed.add(raw)
     actual_managed.discard(None)
     for name in sorted(actual_managed - expected):
         findings.append({"severity": "warning", "code": "orphan_container",
