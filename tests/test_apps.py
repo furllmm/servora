@@ -89,3 +89,19 @@ def test_marketplace_entry_and_search(tmp_path):
 def test_marketplace_rejects_official_publish():
     with __import__('pytest').raises(MarketplaceError):
         MarketplaceStore("/tmp/servora-test-marketplace").publish({"name":"official-app", "category":"official", "verification":"verified", "manifest":{"name":"official-app","version":"1","services":[{"name":"web","image":"nginx"}]}})
+
+
+def test_app_health_aggregates_services():
+    from servora.apps import app_health
+
+    class HealthPodman:
+        def container_health(self, name):
+            return {"name": name, "status": "healthy", "running": True, "healthcheck": "healthy"}
+
+    m = validate_app_manifest({"name":"demo","version":"1","services":[
+        {"name":"db","image":"postgres"},
+        {"name":"web","image":"nginx","depends_on":["db"]},
+    ]})
+    result = app_health(HealthPodman(), m)
+    assert result["status"] == "healthy"
+    assert [x["service"] for x in result["services"]] == ["db", "web"]
