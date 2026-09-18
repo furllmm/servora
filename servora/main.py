@@ -9,8 +9,8 @@ from urllib.parse import parse_qs, urlparse
 
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
-from .deployment import capture_app_state, image_status
                    uninstall_app, update_app, validate_app_manifest, app_health, start_app, stop_app, restart_app)
+from .deployment import capture_app_state, image_status)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
@@ -424,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise AppManifestError("App is not installed")
                 try:
                     result = update_app(p, old, raw, store=app_store, transaction_root=runtime.root)
-                deployment = capture_app_state(p, manifest, runtime.root)
+                    deployment = capture_app_state(p, manifest, runtime.root)
                 except Exception as exc:
                     audit.append("app.update", "user", status="failed", name=manifest.name,
                                  action="update", summary="Servora app update failed", reason=str(exc))
