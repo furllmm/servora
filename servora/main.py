@@ -289,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 if old is None:
                     raise AppManifestError("App is not installed")
                 try:
-                    result = update_app(p, old, raw, store=app_store)
+                    result = update_app(p, old, raw, store=app_store, transaction_root=runtime.root)
                 except Exception as exc:
                     audit.append("app.update", "user", status="failed", name=manifest.name,
                                  action="update", summary="Servora app update failed", reason=str(exc))
