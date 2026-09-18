@@ -117,6 +117,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/containers/stats":
                 name = parse_qs(parsed.query).get("name", [None])[0]
                 return self._json(p.stats(_name(name) if name else None))
+            if parsed.path == "/api/containers/health":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                return self._json(p.container_health(name))
             if parsed.path == "/api/server-browser":
                 url = parse_qs(parsed.query).get("url", [""])[0]
                 validate_server_url(url)
