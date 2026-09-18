@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
-                   uninstall_app, update_app, validate_app_manifest, app_health)
+                   uninstall_app, update_app, validate_app_manifest, app_health, start_app, stop_app, restart_app)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
@@ -219,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = p.remove_network(name)
                 return self._json({"name": name, "result": result})
 
-            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -366,6 +366,19 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.path == "/api/marketplace/publish":
                     entry = marketplace.publish(raw)
                     return self._json(entry.to_dict(), 201)
+                if parsed.path in {"/api/apps/start", "/api/apps/stop", "/api/apps/restart"}:
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    app = app_store.get(name)
+                    if app is None:
+                        raise AppManifestError("App is not installed")
+                    action = parsed.path.rsplit("/", 1)[-1]
+                    operation = {"start": start_app, "stop": stop_app, "restart": restart_app}[action]
+                    result = operation(p, app)
+                    audit.append("app.action", "user", name=name, action=action,
+                                 status=result.get("status", "unknown"),
+                                 summary=f"Servora app {action} operation executed",
+                                 details={"services": result.get("services", []) if action != "restart" else {"stop": result.get("stop", {}).get("status"), "start": result.get("start", {}).get("status")}})
+                    return self._json(result)
                 manifest = validate_app_manifest(raw)
                 if parsed.path == "/api/apps/install":
                     if app_store.get(manifest.name) is not None:
