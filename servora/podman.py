@@ -77,6 +77,22 @@ class Podman:
     def list_networks(self) -> list[dict[str, Any]]:
         return self._json_lines("network", "ls", "--format", "json")
 
+    def inspect_image(self, name: str) -> dict[str, Any]:
+        result = self._run("image", "inspect", name)
+        try:
+            values = json.loads(result.stdout)
+            return values[0]
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            raise PodmanError("Podman returned invalid image inspect data") from exc
+
+    def inspect_network(self, name: str) -> dict[str, Any]:
+        result = self._run("network", "inspect", name)
+        try:
+            values = json.loads(result.stdout)
+            return values[0]
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            raise PodmanError("Podman returned invalid network inspect data") from exc
+
     def inspect_volume(self, name: str) -> dict[str, Any]:
         result = self._run("volume", "inspect", name)
         try:
@@ -172,6 +188,9 @@ class Podman:
 
     def remove_network(self, name: str) -> str:
         return self._run("network", "rm", name).stdout.strip()
+
+    def remove_image(self, name: str, force: bool = False) -> str:
+        return self._run("image", "rm", "--force" if force else None, name).stdout.strip()
 
     def create_network(self, name: str) -> str:
         return self._run("network", "create", name).stdout.strip()
