@@ -279,6 +279,71 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
     return results
 
 
+def _installed_container_names(podman) -> set[str]:
+    """Return names of containers currently known to Podman."""
+    names: set[str] = set()
+    for item in podman.list_containers(all=True):
+        name = item.get("Names") or item.get("Name") or item.get("name")
+        if isinstance(name, list):
+            names.update(str(x) for x in name if x)
+        elif name:
+            names.add(str(name))
+    return names
+
+
+def _app_operation_result(manifest: AppManifest, action: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+    failed = [x for x in results if x["status"] == "failed"]
+    missing = [x for x in results if x["status"] == "missing"]
+    status = "failed" if failed else ("partial" if missing else "ok")
+    return {"app": manifest.name, "action": action, "status": status, "services": results}
+
+
+def start_app(podman, manifest: AppManifest) -> dict[str, Any]:
+    """Start an installed app in deterministic dependency-first order."""
+    names = _installed_container_names(podman)
+    results = []
+    for service in resolve_service_order(manifest):
+        name = service_container_name(manifest.name, service.name)
+        if name not in names:
+            results.append({"service": service.name, "container": name, "status": "missing"})
+            continue
+        try:
+            result = podman.start_container(name)
+            results.append({"service": service.name, "container": name, "status": "started", "result": result})
+        except Exception as exc:
+            results.append({"service": service.name, "container": name, "status": "failed", "error": str(exc)})
+    return _app_operation_result(manifest, "start", results)
+
+
+def stop_app(podman, manifest: AppManifest) -> dict[str, Any]:
+    """Stop an installed app in reverse dependency order."""
+    names = _installed_container_names(podman)
+    results = []
+    for service in reversed(resolve_service_order(manifest)):
+        name = service_container_name(manifest.name, service.name)
+        if name not in names:
+            results.append({"service": service.name, "container": name, "status": "missing"})
+            continue
+        try:
+            result = podman.stop_container(name)
+            results.append({"service": service.name, "container": name, "status": "stopped", "result": result})
+        except Exception as exc:
+            results.append({"service": service.name, "container": name, "status": "failed", "error": str(exc)})
+    return _app_operation_result(manifest, "stop", results)
+
+
+def restart_app(podman, manifest: AppManifest) -> dict[str, Any]:
+    """Restart an installed app using explicit reverse-stop/forward-start semantics."""
+    stopped = stop_app(podman, manifest)
+    if stopped["status"] == "failed":
+        return {"app": manifest.name, "action": "restart", "status": "failed", "stop": stopped,
+                "start": {"app": manifest.name, "action": "start", "status": "skipped", "services": []}}
+    started = start_app(podman, manifest)
+    status = "failed" if started["status"] == "failed" else (
+        "partial" if stopped["status"] == "partial" or started["status"] == "partial" else "ok"
+    )
+    return {"app": manifest.name, "action": "restart", "status": status, "stop": stopped, "start": started}
+
 def app_health(podman, manifest: AppManifest) -> dict[str, Any]:
     """Aggregate the runtime health of every service in an installed app."""
     services = []
