@@ -17,6 +17,7 @@ from .ai import AIPlanError, create_container_plan, provider_from_env
 from .ai_execution import analyze_plan, execute_plan
 from .troubleshooting import TroubleshootingError, collect_container_diagnostics, troubleshoot_container
 from .recovery import RecoveryError, execute_recovery
+from .recovery_policy import RecoveryPolicyError, RecoveryController
 from .server_browser import BareServerBrowser, validate_server_url
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -122,6 +123,9 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/containers/health":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 return self._json(p.container_health(name))
+            if parsed.path == "/api/recovery/policy":
+                controller = RecoveryController(p, runtime.root)
+                return self._json(controller.store.load())
             if parsed.path == "/api/containers/diagnostics":
                 q = parse_qs(parsed.query)
                 name = _name(q.get("name", [""])[0])
@@ -147,7 +151,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover"}:
+            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -181,6 +185,17 @@ class Handler(BaseHTTPRequestHandler):
                     result = execute_plan(p, manifest)
                     return self._json({"status": "launched", **response, "result": result}, 201)
 
+                if parsed.path == "/api/recovery/policy":
+                    controller = RecoveryController(p, runtime.root)
+                    policy = raw.get("policy") if isinstance(raw, dict) else None
+                    if not isinstance(policy, dict):
+                        raise RecoveryPolicyError("policy must be an object")
+                    return self._json(controller.store.save(policy))
+                if parsed.path == "/api/recovery/evaluate":
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
+                    controller = RecoveryController(p, runtime.root)
+                    return self._json(controller.evaluate(name, approved=approved))
                 if parsed.path == "/api/ai/recover":
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
                     action = raw.get("action") if isinstance(raw, dict) else None
@@ -256,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
             if action is None:
                 return self._json({"error": "not found"}, 404)
             return self._json({"name": name, "result": action(name)})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
