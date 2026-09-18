@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ai import AIPlanError, AIProvider
+from .ai import AIProvider
 from .ai_execution import analyze_plan
 from .podman import PodmanError
 
@@ -35,7 +35,7 @@ def build_troubleshooting_prompt(diagnostics: dict[str, Any]) -> str:
     """Create a bounded prompt that asks for diagnosis, not arbitrary execution."""
     return (
         "Diagnose this Servora container. Return ONLY JSON with keys "
-        "summary, findings, recommendations, confidence. Do not return shell commands "
+        "summary, findings, recommendations, confidence, actions. The actions list may contain only start, stop, or restart with a reason. Do not return shell commands "
         "or request privileged host access. Recommendations must be safe, reversible, "
         "and require user approval before any mutation.\n\n"
         + str(diagnostics)[:50000]
@@ -54,4 +54,13 @@ def troubleshoot_container(provider: AIProvider, diagnostics: dict[str, Any]) ->
         raise TroubleshootingError("AI diagnosis is missing required fields")
     if not isinstance(result["findings"], list) or not isinstance(result["recommendations"], list):
         raise TroubleshootingError("AI diagnosis lists are invalid")
+    actions = result.get("actions", [])
+    if not isinstance(actions, list):
+        raise TroubleshootingError("AI diagnosis actions are invalid")
+    allowed = {"start", "stop", "restart"}
+    for action in actions:
+        if not isinstance(action, dict) or action.get("action") not in allowed:
+            raise TroubleshootingError("AI diagnosis contains an unsupported recovery action")
+        if "reason" in action and (not isinstance(action["reason"], str) or len(action["reason"]) > 1000):
+            raise TroubleshootingError("AI diagnosis contains an invalid recovery reason")
     return result
