@@ -37,6 +37,8 @@ def _safe_member(name: str) -> bool:
 def _write_tar(source_root: Path, output_tar: Path) -> None:
     with tarfile.open(output_tar, "w") as archive:
         for path in sorted(source_root.rglob("*")):
+            if path == output_tar:
+                continue
             rel = path.relative_to(source_root).as_posix()
             if not _safe_member(rel):
                 raise BackupError(f"Unsafe backup path: {rel}")
