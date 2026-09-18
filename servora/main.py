@@ -20,6 +20,7 @@ from .recovery import RecoveryError, execute_recovery
 from .recovery_policy import RecoveryPolicyError, RecoveryController
 from .server_browser import BareServerBrowser, validate_server_url
 from .audit import AuditLog, AuditError
+from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
 MODE = os.environ.get("SERVORA_MODE", "user")
@@ -71,12 +72,14 @@ class Handler(BaseHTTPRequestHandler):
                         version = podman.version()
                     except PodmanError:
                         available = False
+                state = validate_runtime_state(runtime.root)
                 return self._json({
                     "podman": available,
                     "version": version,
                     "runtime": str(runtime.root),
                     "mode": runtime.mode,
                     "server_browser": {"available": browser.available, "mode": "bare"},
+                    "reliability": state,
                 })
 
             if parsed.path == "/api/podman/help":
@@ -128,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/recovery/policy":
                 controller = RecoveryController(p, runtime.root)
                 return self._json(controller.store.load())
+            if parsed.path == "/api/reliability":
+                return self._json(validate_runtime_state(runtime.root))
             if parsed.path == "/api/audit":
                 q = parse_qs(parsed.query)
                 return self._json(audit.read(int(q.get("limit", [100])[0]), event=q.get("event", [None])[0], name=q.get("name", [None])[0]))
@@ -187,6 +192,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                     if requires_approval and not approved:
                         return self._json({"status": "approval_required", **response}, 409)
+                    preflight = preflight_manifest(p, validate_app_manifest(manifest), runtime.root)
+                    if not preflight["ok"]:
+                        raise ReliabilityError(json.dumps(preflight))
                     result = execute_plan(p, manifest)
                     audit.append("ai.create.launch", "ai", name=manifest.get("name"), action="create_container", summary="AI-generated container plan launched", details={"provider": provider.name, "findings": response["findings"], "health": result.get("health")})
                     return self._json({"status": "launched", **response, "result": result}, 201)
@@ -255,6 +263,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parsed.path == "/api/apps/install":
                     if app_store.get(manifest.name) is not None:
                         raise AppManifestError("App is already installed; use update")
+                    preflight = preflight_manifest(p, manifest, runtime.root)
+                    if not preflight["ok"]:
+                        raise ReliabilityError(json.dumps(preflight))
                     result = install_app(p, raw)
                     app_store.save(manifest)
                     audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
@@ -293,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
             result = action(name)
             audit.append("container.action", "user", name=name, action=parsed.path.rsplit("/", 1)[-1], summary="Container action executed")
             return self._json({"name": name, "result": result})
-        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError, ReliabilityError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def log_message(self, *_args):
