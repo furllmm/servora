@@ -14,6 +14,7 @@ from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
 from .ai_import import AIImportError, import_source
 from .ai import AIPlanError, create_container_plan, provider_from_env
+from .ai_execution import analyze_plan, execute_plan
 from .server_browser import BareServerBrowser, validate_server_url
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -136,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan"}:
+            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -146,6 +147,23 @@ class Handler(BaseHTTPRequestHandler):
                     provider = provider_from_env()
                     result = create_container_plan(provider, prompt)
                     return self._json({"provider": provider.name, "plan": result})
+
+                if parsed.path == "/api/ai/create":
+                    prompt = raw.get("prompt") if isinstance(raw, dict) else None
+                    approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
+                    provider = provider_from_env()
+                    plan = create_container_plan(provider, prompt)
+                    manifest, findings, requires_approval = analyze_plan(plan)
+                    response = {
+                        "provider": provider.name,
+                        "plan": plan,
+                        "manifest": manifest,
+                        "findings": [f.to_dict() for f in findings],
+                    }
+                    if requires_approval and not approved:
+                        return self._json({"status": "approval_required", **response}, 409)
+                    result = execute_plan(p, manifest)
+                    return self._json({"status": "launched", **response, "result": result}, 201)
 
                 if parsed.path == "/api/ai/import":
                     source = raw.get("source") if isinstance(raw, dict) else None
