@@ -265,6 +265,31 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
     return results
 
 
+def app_health(podman, manifest: AppManifest) -> dict[str, Any]:
+    """Aggregate the runtime health of every service in an installed app."""
+    services = []
+    for service in manifest.services:
+        name = service_container_name(manifest.name, service.name)
+        try:
+            health = podman.container_health(name)
+        except Exception as exc:
+            health = {"name": name, "status": "missing", "running": False, "healthcheck": None, "error": str(exc)}
+        services.append({"service": service.name, **health})
+
+    statuses = [x["status"] for x in services]
+    if any(s == "unhealthy" for s in statuses):
+        overall = "unhealthy"
+    elif any(s in {"missing", "exited", "dead", "stopped"} for s in statuses):
+        overall = "degraded"
+    elif any(s == "starting" for s in statuses):
+        overall = "starting"
+    elif all(s in {"healthy", "running"} for s in statuses):
+        overall = "healthy"
+    else:
+        overall = "unknown"
+    return {"name": manifest.name, "version": manifest.version, "status": overall, "services": services}
+
+
 class AppStore:
     """Persistent registry for Servora-managed apps."""
     def __init__(self, root: str | Path):
