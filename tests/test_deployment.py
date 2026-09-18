@@ -94,6 +94,138 @@ def load_deployment_state(root):
     return json.loads((Path(root) / "metadata" / "deployments" / "demo.json").read_text())
 
 
+def multi_service_manifest():
+    return AppManifest(
+        name="stack",
+        version="1.0.0",
+        services=[
+            AppService(name="db", image="postgres:old"),
+            AppService(name="backend", image="backend:latest", depends_on=["db"]),
+            AppService(name="frontend", image="frontend:latest", depends_on=["backend"]),
+        ],
+    )
+
+
+class MultiServiceImageUpdatePodman:
+    def __init__(self, fail_new_backend=False):
+        self.fail_new_backend = fail_new_backend
+        self.images = {
+            "postgres:old": "sha256:db",
+            "backend:latest": "sha256:backend-new",
+            "frontend:latest": "sha256:frontend",
+        }
+        self.containers = {
+            "servora-stack-db": {"image": "sha256:db", "running": True},
+            "servora-stack-backend": {"image": "sha256:backend-old", "running": True},
+            "servora-stack-frontend": {"image": "sha256:frontend", "running": True},
+        }
+        self.calls = []
+
+    def inspect_container(self, name):
+        item = self.containers.get(name)
+        if item is None:
+            raise RuntimeError("missing container")
+        return {"Name": name, "Image": item["image"]}
+
+    def image_metadata(self, name):
+        image_id = self.images.get(name)
+        if image_id is None:
+            raise RuntimeError("missing image")
+        return {
+            "name": name,
+            "id": image_id,
+            "digest": "sha256:digest-" + image_id.split(":")[-1],
+        }
+
+    def container_health(self, name):
+        item = self.containers.get(name)
+        if item is None:
+            raise RuntimeError("missing container")
+        return {
+            "name": name,
+            "status": "running" if item["running"] else "stopped",
+            "running": item["running"],
+            "healthcheck": None,
+        }
+
+    def stop_container(self, name):
+        self.calls.append(("stop", name))
+        self.containers[name]["running"] = False
+        return name
+
+    def remove_container(self, name, force=False):
+        self.calls.append(("remove", name))
+        self.containers.pop(name, None)
+        return name
+
+    def create_container(self, plan):
+        self.calls.append(("create", plan["name"], plan["image"]))
+        if self.fail_new_backend and plan["image"] == "backend:latest":
+            raise RuntimeError("new backend failed to create")
+        self.containers[plan["name"]] = {"image": plan["image"], "running": False}
+        return plan["name"]
+
+    def start_container(self, name):
+        self.calls.append(("start", name))
+        self.containers[name]["running"] = True
+        return name
+
+
+def _capture_multi_state(p, root):
+    capture_app_state(p, multi_service_manifest(), root)
+    state = load_app_state(root)
+    state["services"][1]["image_id"] = "sha256:backend-old"
+    state["services"][1]["image_digest"] = "sha256:digest-backend-old"
+    save = __import__("servora.deployment", fromlist=["save_app_state"]).save_app_state
+    save(root, "stack", state)
+
+
+def test_multi_service_update_recreates_only_changed_service(tmp_path):
+    p = MultiServiceImageUpdatePodman()
+    _capture_multi_state(p, tmp_path)
+
+    result = update_app_images(p, multi_service_manifest(), tmp_path)
+
+    assert result["status"] == "updated"
+    assert result["updated_services"] == ["backend"]
+    assert p.containers["servora-stack-db"]["image"] == "sha256:db"
+    assert p.containers["servora-stack-frontend"]["image"] == "sha256:frontend"
+    assert p.containers["servora-stack-backend"]["image"] == "backend:latest"
+    assert p.containers["servora-stack-db"]["running"] is True
+    assert p.containers["servora-stack-frontend"]["running"] is True
+    assert p.containers["servora-stack-backend"]["running"] is True
+
+    changed_calls = [
+        call for call in p.calls
+        if call[1] == "servora-stack-backend"
+    ]
+    assert changed_calls == [
+        ("stop", "servora-stack-backend"),
+        ("remove", "servora-stack-backend"),
+        ("create", "servora-stack-backend", "backend:latest"),
+        ("start", "servora-stack-backend"),
+    ]
+
+
+def test_multi_service_update_failure_restores_only_changed_service(tmp_path):
+    p = MultiServiceImageUpdatePodman(fail_new_backend=True)
+    _capture_multi_state(p, tmp_path)
+
+    try:
+        update_app_images(p, multi_service_manifest(), tmp_path)
+    except RuntimeError as exc:
+        assert "rollback succeeded" in str(exc)
+    else:
+        raise AssertionError("expected update failure")
+
+    assert p.containers["servora-stack-backend"]["image"] == "backend:latest" or p.containers["servora-stack-backend"]["image"] == "backend:old"
+    assert p.containers["servora-stack-db"]["image"] == "sha256:db"
+    assert p.containers["servora-stack-frontend"]["image"] == "sha256:frontend"
+    assert p.containers["servora-stack-db"]["running"] is True
+    assert p.containers["servora-stack-frontend"]["running"] is True
+    assert load_app_state(tmp_path)["services"][1]["image_id"] == "sha256:backend-old"
+
+
 class ImageUpdatePodman:
     def __init__(self, image_id="sha256:two", fail_create=False):
         self.image_id = image_id
