@@ -87,3 +87,29 @@ def test_repair_removes_detected_orphan(tmp_path):
                                 name="servora-orphan-web", approved=True)
     assert result["status"] == "repaired"
     assert p.removed == [("servora-orphan-web", True)]
+
+def test_runtime_state_reports_disk_usage(tmp_path: Path):
+    for name in ["config", "metadata", "logs", "podman", "apps", "backups"]:
+        (tmp_path / name).mkdir()
+    (tmp_path / "config" / "servora.json").write_text('{"version": 1}', encoding="utf-8")
+    result = validate_runtime_state(tmp_path)
+    assert "disk" in result
+    assert result["disk"]["total_bytes"] > 0
+    assert result["disk"]["free_bytes"] >= 0
+
+
+def test_preflight_min_free_space_is_configurable(tmp_path: Path):
+    m = validate_app_manifest({"name": "demo", "services": [{"name": "web", "image": "nginx"}]})
+    result = preflight_manifest(FakePodman(), m, tmp_path, min_free_bytes=10**30)
+    assert result["ok"] is False
+    assert any(x["code"] == "low_disk_space" for x in result["findings"])
+
+
+def test_preflight_rejects_negative_disk_threshold(tmp_path: Path):
+    m = validate_app_manifest({"name": "demo", "services": [{"name": "web", "image": "nginx"}]})
+    try:
+        preflight_manifest(FakePodman(), m, tmp_path, min_free_bytes=-1)
+    except ValueError as exc:
+        assert "non-negative" in str(exc)
+    else:
+        raise AssertionError("negative threshold must fail")
