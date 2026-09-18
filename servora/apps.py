@@ -256,6 +256,22 @@ def _check_resource_conflict(podman, resource_type: str, name: str, app_name: st
         )
 
 
+
+def _ensure_images(podman, manifest: AppManifest) -> list[dict[str, Any]]:
+    """Ensure every service image is locally available before mutating app resources."""
+    image_exists = getattr(podman, "image_exists", None)
+    pull_image = getattr(podman, "pull_image", None)
+    if image_exists is None or pull_image is None:
+        return [{"image": image, "status": "unchecked"} for image in sorted({s.image for s in manifest.services})]
+    results: list[dict[str, Any]] = []
+    for image in sorted({s.image for s in manifest.services}):
+        if image_exists(image):
+            results.append({"image": image, "status": "present"})
+            continue
+        result = pull_image(image)
+        results.append({"image": image, "status": "pulled", "result": result})
+    return results
+
 def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
     """Create an app stack with a persistent rollback journal.
@@ -268,6 +284,7 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
     created: list[str] = []
     results: list[dict[str, Any]] = []
     try:
+        image_results = _ensure_images(podman, manifest)
         existing_networks = {
             (x.get("Name") or x.get("name")) for x in podman.list_networks()
         }
@@ -311,7 +328,7 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
             created.append(name)
             if tx:
                 tx.record("containers", name)
-            results.append({"service": service.name, "container": name, "result": result})
+            results.append({"service": service.name, "container": name, "result": result, "images": image_results})
         if tx:
             tx.commit()
     except Exception:
@@ -499,6 +516,11 @@ def update_app(podman, old_manifest: AppManifest, raw_manifest: dict[str, Any], 
     new_manifest = validate_app_manifest(raw_manifest)
     if new_manifest.name != old_manifest.name:
         raise AppManifestError("App name cannot change during update")
+    # Prepare new images before removing the working old stack.
+    try:
+        _ensure_images(podman, new_manifest)
+    except Exception as exc:
+        raise AppManifestError(f"Update image preparation failed; existing app was preserved: {exc}") from exc
     uninstall_app(podman, old_manifest)
     try:
         created = install_app(podman, raw_manifest, check_ports=check_ports, transaction_root=transaction_root)
