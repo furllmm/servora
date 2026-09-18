@@ -1,5 +1,5 @@
 from servora.apps import AppManifest, AppService
-from servora.deployment import capture_app_state, image_status
+from servora.deployment import capture_app_state, image_status, check_app_updates
 
 
 class DeploymentPodman:
@@ -57,3 +57,20 @@ def test_matching_digest_can_keep_status_current(tmp_path):
     result = image_status(p, manifest(), tmp_path)
     assert result["status"] == "current"
     assert result["services"][0]["status"] == "current"
+
+def test_check_app_updates_refreshes_unique_images_without_redeploying(tmp_path):
+    class RefreshPodman(DeploymentPodman):
+        def __init__(self):
+            super().__init__()
+            self.refresh_calls = []
+
+        def refresh_image(self, name):
+            self.refresh_calls.append(name)
+            return {"name": name, "status": "unchanged", "changed": False}
+
+    p = RefreshPodman()
+    capture_app_state(p, manifest(), tmp_path)
+    result = check_app_updates(p, manifest(), tmp_path)
+    assert p.refresh_calls == ["nginx:latest"]
+    assert result["status"] == "current"
+    assert result["deployment_recorded"] is True
