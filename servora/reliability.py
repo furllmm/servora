@@ -24,7 +24,7 @@ def _check_port(port: int, host: str = "127.0.0.1") -> dict[str, Any]:
     return {"ok": True, "port": port}
 
 
-def preflight_manifest(podman, manifest: Any, runtime_root: str | Path, *, check_images: bool = False) -> dict[str, Any]:
+def preflight_manifest(podman, manifest: Any, runtime_root: str | Path, *, check_images: bool = False, min_free_bytes: int = 256 * 1024 * 1024) -> dict[str, Any]:
     """Validate common launch hazards before mutating Podman state."""
     findings: list[dict[str, Any]] = []
     root = Path(runtime_root)
@@ -35,8 +35,10 @@ def preflight_manifest(podman, manifest: Any, runtime_root: str | Path, *, check
         findings.append({"severity": "error", "code": "runtime_permission", "message": "Servora runtime directory is not accessible"})
 
     usage = shutil.disk_usage(root if root.exists() else Path.home())
-    if usage.free < 256 * 1024 * 1024:
-        findings.append({"severity": "error", "code": "low_disk_space", "message": "Less than 256 MiB free on the Servora filesystem", "free_bytes": usage.free})
+    if min_free_bytes < 0:
+        raise ReliabilityError("min_free_bytes must be non-negative")
+    if usage.free < min_free_bytes:
+        findings.append({"severity": "error", "code": "low_disk_space", "message": "Insufficient free space on the Servora filesystem", "free_bytes": usage.free, "required_bytes": min_free_bytes})
 
     service_names = {s.name for s in manifest.services}
     images = None
@@ -83,6 +85,32 @@ def validate_runtime_state(root: str | Path) -> dict[str, Any]:
             findings.append({"severity": "error", "code": "missing_runtime_path", "path": name, "message": f"Missing runtime path: {name}"})
         elif not path.is_dir():
             findings.append({"severity": "error", "code": "invalid_runtime_path", "path": name, "message": f"Runtime path is not a directory: {name}"})
+        else:
+            if not os.access(path, os.R_OK | os.W_OK | os.X_OK):
+                findings.append({"severity": "error", "code": "runtime_permission", "path": name, "message": f"Runtime path is not readable/writable: {name}"})
+
+    for name in ("config", "metadata", "logs", "podman", "apps", "backups"):
+        path = root / name
+        if not path.is_dir():
+            continue
+        probe = path / ".servora-write-test"
+        try:
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except OSError as exc:
+            try:
+                if probe.exists():
+                    probe.unlink()
+            except OSError:
+                pass
+            findings.append({"severity": "error", "code": "runtime_write_failed", "path": name, "message": f"Runtime path is not writable: {name}", "error": str(exc)})
+    usage = shutil.disk_usage(root)
+    disk = {
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+        "free_percent": round((usage.free / usage.total) * 100, 2) if usage.total else 0,
+    }
     config = root / "config" / "servora.json"
     if not config.exists():
         findings.append({"severity": "error", "code": "missing_config", "message": "Servora config file is missing"})
@@ -94,7 +122,7 @@ def validate_runtime_state(root: str | Path) -> dict[str, Any]:
                 findings.append({"severity": "error", "code": "invalid_config", "message": "Servora config is invalid"})
         except (OSError, ValueError):
             findings.append({"severity": "error", "code": "invalid_config", "message": "Servora config is unreadable or malformed"})
-    return {"ok": not findings, "findings": findings}
+    return {"ok": not findings, "findings": findings, "disk": disk}
 
 
 def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
