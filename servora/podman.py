@@ -88,6 +88,30 @@ class Podman:
     def start_container(self, name: str) -> str:
         return self._run("start", name).stdout.strip()
 
+    def container_health(self, name: str) -> dict[str, Any]:
+        """Return a normalized health snapshot from Podman inspect data."""
+        data = self.inspect_container(name)
+        state = data.get("State") or {}
+        status = str(state.get("Status", "unknown")).lower()
+        health = state.get("Health") or {}
+        health_status = str(health.get("Status", "")).lower() or None
+        if health_status == "healthy":
+            result = "healthy"
+        elif health_status in {"unhealthy", "starting"}:
+            result = health_status
+        elif status == "running":
+            result = "running"
+        elif status in {"created", "paused", "exited", "stopped", "dead"}:
+            result = status
+        else:
+            result = "unknown"
+        return {
+            "name": name,
+            "status": result,
+            "running": status == "running",
+            "healthcheck": health_status,
+        }
+
     def stop_container(self, name: str) -> str:
         return self._run("stop", name).stdout.strip()
 
