@@ -51,6 +51,9 @@ class FakePodman:
     def remove_container(self, name, force=False):
         self.removed.append((name, force))
 
+    def inspect_container(self, name):
+        return {"State": {"Status": "running"}}
+
 
 def test_execute_uses_restricted_podman_flow(monkeypatch):
     plan = create_container_plan(MockAIProvider(), "nginx")
@@ -61,3 +64,12 @@ def test_execute_uses_restricted_podman_flow(monkeypatch):
     assert result["container"] == "servora-example-example"
     assert fake.created[0]["image"] == "nginx:alpine"
     assert fake.started == ["servora-example-example"]
+
+
+def test_execute_reports_running_health():
+    plan = create_container_plan(MockAIProvider(), "nginx")
+    manifest, _, _ = analyze_plan(plan)
+    fake = FakePodman()
+    result = execute_plan(fake, manifest, check_ports=False)
+    assert result["health"]["status"] == "running"
+    assert result["health"]["running"] is True
