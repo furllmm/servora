@@ -20,7 +20,7 @@ from .recovery import RecoveryError, execute_recovery
 from .recovery_policy import RecoveryPolicyError, RecoveryController
 from .server_browser import BareServerBrowser, validate_server_url
 from .audit import AuditLog, AuditError
-from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state, scan_reliability
+from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state, scan_reliability, repair_reliability
 from .transaction import list_operations
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
@@ -142,7 +142,9 @@ class Handler(BaseHTTPRequestHandler):
                 controller = RecoveryController(p, runtime.root)
                 return self._json(controller.store.load())
             if parsed.path == "/api/reliability":
-                return self._json(validate_runtime_state(runtime.root))
+                scan = scan_reliability(p, runtime.root)
+                scan["runtime"] = validate_runtime_state(runtime.root)
+                return self._json(scan)
             if parsed.path == "/api/audit":
                 q = parse_qs(parsed.query)
                 return self._json(audit.read(int(q.get("limit", [100])[0]), event=q.get("event", [None])[0], name=q.get("name", [None])[0]))
@@ -171,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
-            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy"}:
+            if parsed.path in {"/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -208,6 +210,19 @@ class Handler(BaseHTTPRequestHandler):
                     result = execute_plan(p, manifest)
                     audit.append("ai.create.launch", "ai", name=manifest.get("name"), action="create_container", summary="AI-generated container plan launched", details={"provider": provider.name, "findings": response["findings"], "health": result.get("health")})
                     return self._json({"status": "launched", **response, "result": result}, 201)
+
+                if parsed.path == "/api/reliability/repair":
+                    action = raw.get("action") if isinstance(raw, dict) else None
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
+                    result = repair_reliability(p, runtime.root, action, name=name, approved=approved)
+                    if result.get("status") == "approval_required":
+                        audit.append("reliability.repair", "user", name=name, action=action,
+                                     status="approval_required", summary="Reliability repair requires explicit approval")
+                        return self._json(result, 409)
+                    audit.append("reliability.repair", "user", name=name, action=action,
+                                 summary="Approved reliability repair executed")
+                    return self._json(result)
 
                 if parsed.path == "/api/recovery/policy":
                     controller = RecoveryController(p, runtime.root)
