@@ -189,6 +189,29 @@ def service_container_name(app_name: str, service_name: str) -> str:
     return f"servora-{app_name}-{service_name}"
 
 
+def resolve_service_order(manifest: AppManifest) -> list[AppService]:
+    """Return a deterministic dependency-first service order."""
+    by_name = {s.name: s for s in manifest.services}
+    state: dict[str, int] = {name: 0 for name in by_name}
+    order: list[AppService] = []
+
+    def visit(name: str, chain: list[str]) -> None:
+        if state[name] == 2:
+            return
+        if state[name] == 1:
+            cycle = chain[chain.index(name):] + [name]
+            raise AppManifestError("Circular service dependency: " + " -> ".join(cycle))
+        state[name] = 1
+        for dep in sorted(by_name[name].depends_on):
+            visit(dep, chain + [name])
+        state[name] = 2
+        order.append(by_name[name])
+
+    for name in sorted(by_name):
+        visit(name, [])
+    return order
+
+
 def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
     """Create an app stack with a persistent rollback journal.
@@ -221,35 +244,26 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                 if tx:
                     tx.record("volumes", volume)
 
-        pending = list(manifest.services)
-        while pending:
-            progress = False
-            for service in pending[:]:
-                if any(dep in {s.name for s in pending} for dep in service.depends_on):
-                    continue
-                name = service_container_name(manifest.name, service.name)
-                if check_ports:
-                    from .service import ensure_port_is_available
-                    for port in service.ports:
-                        ensure_port_is_available(port["host"])
-                plan = {
-                    "name": name,
-                    "image": service.image,
-                    "ports": service.ports,
-                    "volumes": [{"name": v.name, "container_path": v.container_path, "read_only": v.read_only} for v in service.volumes],
-                    "environment": service.environment,
-                    "networks": service.networks,
-                    "command": service.command,
-                }
-                result = podman.create_container(plan)
-                created.append(name)
-                if tx:
-                    tx.record("containers", name)
-                results.append({"service": service.name, "container": name, "result": result})
-                pending.remove(service)
-                progress = True
-            if not progress:
-                raise AppManifestError("Circular service dependency")
+        for service in resolve_service_order(manifest):
+            name = service_container_name(manifest.name, service.name)
+            if check_ports:
+                from .service import ensure_port_is_available
+                for port in service.ports:
+                    ensure_port_is_available(port["host"])
+            plan = {
+                "name": name,
+                "image": service.image,
+                "ports": service.ports,
+                "volumes": [{"name": v.name, "container_path": v.container_path, "read_only": v.read_only} for v in service.volumes],
+                "environment": service.environment,
+                "networks": service.networks,
+                "command": service.command,
+            }
+            result = podman.create_container(plan)
+            created.append(name)
+            if tx:
+                tx.record("containers", name)
+            results.append({"service": service.name, "container": name, "result": result})
         if tx:
             tx.commit()
     except Exception:
