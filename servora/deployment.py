@@ -111,3 +111,35 @@ def check_app_updates(podman, manifest: AppManifest, root: str | Path) -> dict[s
         "services": status["services"],
         "deployment_recorded": before_state is not None,
     }
+
+def build_app_update_preview(podman, manifest: AppManifest, root: str | Path) -> dict[str, Any]:
+    """Build a read-only update plan from recorded and current image state.
+
+    The function never pulls images, changes containers, or writes deployment state.
+    """
+    status = image_status(podman, manifest, root)
+    services = []
+    for item in status["services"]:
+        service = {**item, "action": "none", "requires_update": item["status"] == "update_available"}
+        if item["status"] == "update_available":
+            service["action"] = "recreate"
+        elif item["status"] == "not_recorded":
+            service["action"] = "record"
+        elif item["status"] == "unknown":
+            service["action"] = "inspect"
+        services.append(service)
+
+    update_services = [x for x in services if x["requires_update"]]
+    return {
+        "app": manifest.name,
+        "version": manifest.version,
+        "status": status["status"],
+        "requires_update": bool(update_services),
+        "update_service_count": len(update_services),
+        "summary": (
+            f"{len(update_services)} service(s) have a newer local image"
+            if update_services else "No image update is currently detected"
+        ),
+        "services": services,
+    }
+
