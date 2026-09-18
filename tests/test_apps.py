@@ -204,3 +204,60 @@ def test_install_rejects_volume_used_by_external_container():
     ]}
     with pytest.raises(AppManifestError, match="Volume 'shared-data'"):
         install_app(p, manifest, check_ports=False)
+
+
+class ImageLifecyclePodman(LifecyclePodman):
+    def __init__(self, present=None, pull_error=None):
+        super().__init__()
+        self.present = set(present or [])
+        self.pull_error = pull_error
+        self.pulled = []
+    def image_exists(self, image):
+        return image in self.present
+    def pull_image(self, image):
+        self.pulled.append(image)
+        if self.pull_error:
+            raise RuntimeError(self.pull_error)
+        self.present.add(image)
+        return f"pulled {image}"
+
+
+def test_install_does_not_pull_existing_image():
+    from servora.apps import install_app
+    p = ImageLifecyclePodman({"nginx:alpine"})
+    manifest = {"name":"demo","version":"1","services":[{"name":"web","image":"nginx:alpine"}]}
+    result = install_app(p, manifest, check_ports=False)
+    assert p.pulled == []
+    assert result[0]["images"][0]["status"] == "present"
+
+
+def test_install_pulls_missing_image_before_creating_resources():
+    from servora.apps import install_app
+    p = ImageLifecyclePodman()
+    manifest = {"name":"demo","version":"1","services":[{"name":"web","image":"nginx:alpine"}]}
+    result = install_app(p, manifest, check_ports=False)
+    assert p.pulled == ["nginx:alpine"]
+    assert p.created == ["servora-demo-web"]
+    assert result[0]["images"][0]["status"] == "pulled"
+
+
+def test_install_pull_failure_creates_no_resources():
+    from servora.apps import install_app
+    p = ImageLifecyclePodman(pull_error="registry unavailable")
+    manifest = {"name":"demo","version":"1","services":[{"name":"web","image":"nginx:alpine","volumes":["demo-data:/data"],"networks":["demo-net"]}]}
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        install_app(p, manifest, check_ports=False)
+    assert p.created == []
+
+
+def test_update_pull_failure_preserves_old_stack(tmp_path):
+    from servora.apps import update_app
+    p = ImageLifecyclePodman({"nginx:1"}, pull_error="registry unavailable")
+    store = AppStore(tmp_path)
+    old = validate_app_manifest({"name":"demo","version":"1.0","services":[{"name":"web","image":"nginx:1"}]})
+    store.save(old)
+    new = {"name":"demo","version":"2.0","services":[{"name":"web","image":"nginx:2"}]}
+    with pytest.raises(AppManifestError, match="existing app was preserved"):
+        update_app(p, old, new, store=store, check_ports=False)
+    assert p.removed == []
+    assert store.get("demo").version == "1.0"
