@@ -10,7 +10,7 @@ class DeploymentPodman:
         return {"Name": name, "Image": self.image_id}
 
     def image_metadata(self, name):
-        return {"name": name, "id": self.image_id, "digest": "sha256:digest-one"}
+        return {"name": name, "id": self.image_id, "digest": getattr(self, "digest", "sha256:digest-" + self.image_id.split(":")[-1])}
 
 
 def manifest():
@@ -53,6 +53,7 @@ def test_matching_digest_can_keep_status_current(tmp_path):
     p = DeploymentPodman("sha256:one")
     capture_app_state(p, manifest(), tmp_path)
     p.image_id = "sha256:two"
+    p.digest = "sha256:digest-one"
     result = image_status(p, manifest(), tmp_path)
     assert result["status"] == "current"
     assert result["services"][0]["status"] == "current"
