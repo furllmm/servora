@@ -74,7 +74,8 @@ def execute_plan(podman, manifest: dict[str, Any], check_ports: bool = True) -> 
         })
         created = True
         start_result = podman.start_container(container_name)
-        return {"container": container_name, "created": result, "started": start_result}
+        health = podman.container_health(container_name)
+        return {"container": container_name, "created": result, "started": start_result, "health": health}
     except Exception:
         if created:
             try:
