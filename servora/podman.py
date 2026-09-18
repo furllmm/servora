@@ -77,6 +77,14 @@ class Podman:
     def list_networks(self) -> list[dict[str, Any]]:
         return self._json_lines("network", "ls", "--format", "json")
 
+    def inspect_volume(self, name: str) -> dict[str, Any]:
+        result = self._run("volume", "inspect", name)
+        try:
+            values = json.loads(result.stdout)
+            return values[0]
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            raise PodmanError("Podman returned invalid volume inspect data") from exc
+
     def inspect_container(self, name: str) -> dict[str, Any]:
         result = self._run("inspect", name)
         try:
