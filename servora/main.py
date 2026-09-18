@@ -124,10 +124,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(p.list_containers())
             if parsed.path == "/api/images":
                 return self._json(p.list_images())
+            if parsed.path == "/api/images/inspect":
+                return self._json(p.inspect_image(_name(parse_qs(parsed.query).get("name", [""])[0])))
             if parsed.path == "/api/volumes":
                 return self._json(p.list_volumes())
+            if parsed.path == "/api/volumes/inspect":
+                return self._json(p.inspect_volume(_name(parse_qs(parsed.query).get("name", [""])[0])))
             if parsed.path == "/api/networks":
                 return self._json(p.list_networks())
+            if parsed.path == "/api/networks/inspect":
+                return self._json(p.inspect_network(_name(parse_qs(parsed.query).get("name", [""])[0])))
             if parsed.path == "/api/containers/inspect":
                 return self._json(p.inspect_container(_name(parse_qs(parsed.query).get("name", [""])[0])))
             if parsed.path == "/api/containers/logs":
@@ -197,6 +203,16 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
+            if parsed.path in {"/api/images/remove", "/api/volumes/remove", "/api/networks/remove"}:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = json.loads(self.rfile.read(length)) if length else {}
+                name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                force = bool(raw.get("force", False)) if isinstance(raw, dict) else False
+                if parsed.path == "/api/images/remove": result = p.remove_image(name, force=force)
+                elif parsed.path == "/api/volumes/remove": result = p.remove_volume(name, force=force)
+                else: result = p.remove_network(name)
+                return self._json({"name": name, "result": result})
+
             if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
