@@ -20,7 +20,8 @@ from .recovery import RecoveryError, execute_recovery
 from .recovery_policy import RecoveryPolicyError, RecoveryController
 from .server_browser import BareServerBrowser, validate_server_url
 from .audit import AuditLog, AuditError
-from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state
+from .reliability import ReliabilityError, preflight_manifest, validate_runtime_state, scan_reliability
+from .transaction import list_operations
 
 ROOT = Path(os.environ.get("SERVORA_ROOT", Path.home() / ".servora"))
 MODE = os.environ.get("SERVORA_MODE", "user")
@@ -81,6 +82,15 @@ class Handler(BaseHTTPRequestHandler):
                     "server_browser": {"available": browser.available, "mode": "bare"},
                     "reliability": state,
                 })
+
+            if parsed.path == "/api/reliability":
+                scan = scan_reliability(p, runtime.root)
+                scan["runtime"] = validate_runtime_state(runtime.root)
+                scan["operations"] = list_operations(runtime.root)
+                return self._json(scan)
+
+            if parsed.path == "/api/reliability/scan":
+                return self._json(scan_reliability(p, runtime.root))
 
             if parsed.path == "/api/podman/help":
                 return self._json({"detected": Podman.detect() is not None, "install": Podman.install_help()})
@@ -266,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
                     preflight = preflight_manifest(p, manifest, runtime.root)
                     if not preflight["ok"]:
                         raise ReliabilityError(json.dumps(preflight))
-                    result = install_app(p, raw)
+                    result = install_app(p, raw, transaction_root=runtime.root)
                     app_store.save(manifest)
                     audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
                     return self._json({"app": manifest_to_dict(manifest), "created": result}, 201)
