@@ -10,7 +10,7 @@ class DeploymentPodman:
         return {"Name": name, "Image": self.image_id}
 
     def image_metadata(self, name):
-        return {"name": name, "id": self.image_id}
+        return {"name": name, "id": self.image_id, "digest": "sha256:digest-one"}
 
 
 def manifest():
@@ -36,9 +36,23 @@ def test_image_status_detects_local_image_change(tmp_path):
     assert result["status"] == "update_available"
     assert result["services"][0]["recorded_image_id"] == "sha256:one"
     assert result["services"][0]["current_image_id"] == "sha256:two"
+    assert result["services"][0]["recorded_image_digest"] == "sha256:digest-one"
 
 
 def test_unrecorded_app_is_not_claimed_current(tmp_path):
     result = image_status(DeploymentPodman(), manifest(), tmp_path)
-    assert result["status"] == "current"
+    assert result["status"] == "not_recorded"
     assert result["services"][0]["status"] == "not_recorded"
+
+def test_image_digest_is_persisted(tmp_path):
+    state = capture_app_state(DeploymentPodman(), manifest(), tmp_path)
+    assert state["services"][0]["image_digest"] == "sha256:digest-one"
+
+
+def test_matching_digest_can_keep_status_current(tmp_path):
+    p = DeploymentPodman("sha256:one")
+    capture_app_state(p, manifest(), tmp_path)
+    p.image_id = "sha256:two"
+    result = image_status(p, manifest(), tmp_path)
+    assert result["status"] == "current"
+    assert result["services"][0]["status"] == "current"
