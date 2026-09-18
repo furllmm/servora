@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
                    uninstall_app, update_app, validate_app_manifest, app_health, start_app, stop_app, restart_app)
-from .deployment import capture_app_state, image_status)
+from .deployment import capture_app_state, image_status, check_app_updates)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
@@ -112,6 +112,16 @@ class Handler(BaseHTTPRequestHandler):
                 if app is None:
                     return self._json({"error": "app not found"}, 404)
                 return self._json(image_status(p, app, runtime.root))
+            if parsed.path == "/api/apps/check-updates":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                app = app_store.get(name)
+                if app is None:
+                    return self._json({"error": "app not found"}, 404)
+                result = check_app_updates(p, app, runtime.root)
+                audit.append("app.update.check", "user", name=name, action="check_updates",
+                             status=result.get("status"), summary="Servora app image update check completed",
+                             details={"refreshed": result.get("refreshed", [])})
+                return self._json(result)
             if parsed.path == "/api/apps/health":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 app = app_store.get(name)
