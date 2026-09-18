@@ -357,14 +357,39 @@ def restore_backup(
             # been created successfully. Existing config/metadata/logs are never
             # overwritten by this safe restore mode.
             for app in apps:
+                before_containers = {
+                    _resource_name(x) for x in podman.list_containers(all=True)
+                    if _resource_name(x)
+                }
+                before_volumes = {
+                    _resource_name(x) for x in podman.list_volumes()
+                    if _resource_name(x)
+                }
+                before_networks = {
+                    _resource_name(x) for x in podman.list_networks()
+                    if _resource_name(x)
+                }
+
                 install_app(podman, manifest_to_dict(app), transaction_root=None)
-                for service in app.services:
-                    tx.record("containers", service_container_name(app.name, service.name))
-                for service in app.services:
-                    for volume in service.volumes:
-                        tx.record("volumes", volume.name)
-                    for network in service.networks:
-                        tx.record("networks", network)
+
+                after_containers = {
+                    _resource_name(x) for x in podman.list_containers(all=True)
+                    if _resource_name(x)
+                }
+                after_volumes = {
+                    _resource_name(x) for x in podman.list_volumes()
+                    if _resource_name(x)
+                }
+                after_networks = {
+                    _resource_name(x) for x in podman.list_networks()
+                    if _resource_name(x)
+                }
+                for name in sorted(after_containers - before_containers):
+                    tx.record("containers", name)
+                for name in sorted(after_volumes - before_volumes):
+                    tx.record("volumes", name)
+                for name in sorted(after_networks - before_networks):
+                    tx.record("networks", name)
 
                 if manifest.get("volumes_included"):
                     for service in app.services:
@@ -387,11 +412,12 @@ def restore_backup(
 
                 AppStore(root).save(app)
 
-            # Health-check every restored container before committing the journal.
+            # Start and health-check every restored container before committing the journal.
             health = []
             for app in apps:
                 for service in app.services:
                     name = service_container_name(app.name, service.name)
+                    podman.start_container(name)
                     health.append(podman.container_health(name))
             tx.commit()
             return {
