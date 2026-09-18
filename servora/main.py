@@ -430,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
                                  action="update", summary="Servora app update failed", reason=str(exc))
                     raise
                 audit.append("app.update", "user", name=manifest.name, action="update", summary="Servora app updated")
-                return self._json(result)
+                return self._json({**result, "deployment": deployment})
 
             if parsed.path == "/api/apps/uninstall":
                 q = parse_qs(parsed.query)
