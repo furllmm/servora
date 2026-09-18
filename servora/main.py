@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .podman import Podman, PodmanError
 from .apps import (AppManifestError, AppStore, install_app, manifest_to_dict,
                    uninstall_app, update_app, validate_app_manifest, app_health, start_app, stop_app, restart_app)
-from .deployment import capture_app_state, image_status, check_app_updates, build_app_update_preview)
+from .deployment import capture_app_state, image_status, check_app_updates, build_app_update_preview, update_app_images)
 from .runtime import Runtime
 from .marketplace import MarketplaceError, MarketplaceStore
 from .marketplace_seed import DEMO
@@ -259,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = p.remove_network(name)
                 return self._json({"name": name, "result": result})
 
-            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -420,6 +420,34 @@ class Handler(BaseHTTPRequestHandler):
                                  details={"services": result.get("services", []) if action != "restart" else {"stop": result.get("stop", {}).get("status"), "start": result.get("start", {}).get("status")}})
                     return self._json(result)
                 manifest = validate_app_manifest(raw)
+                if parsed.path == "/api/apps/update-images":
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    app = app_store.get(name)
+                    if app is None:
+                        raise AppManifestError("App is not installed")
+                    try:
+                        result = update_app_images(p, app, runtime.root)
+                    except Exception as exc:
+                        audit.append(
+                            "app.update.images",
+                            "user",
+                            status="failed",
+                            name=name,
+                            action="update_images",
+                            summary="Servora image update failed",
+                            reason=str(exc),
+                        )
+                        raise
+                    audit.append(
+                        "app.update.images",
+                        "user",
+                        name=name,
+                        action="update_images",
+                        summary="Servora app images updated",
+                        details={"updated_services": result.get("updated_services", [])},
+                    )
+                    return self._json(result)
+
                 if parsed.path == "/api/apps/install":
                     if app_store.get(manifest.name) is not None:
                         raise AppManifestError("App is already installed; use update")
