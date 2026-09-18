@@ -77,6 +77,18 @@ class Podman:
     def list_networks(self) -> list[dict[str, Any]]:
         return self._json_lines("network", "ls", "--format", "json")
 
+    def image_exists(self, name: str) -> bool:
+        """Return whether Podman has a local image matching the given reference."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("image name is required")
+        return self._run("image", "exists", name, check=False).returncode == 0
+
+    def pull_image(self, name: str) -> str:
+        """Pull an image reference into the local Podman image store."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("image name is required")
+        return self._run("pull", name).stdout.strip()
+
     def inspect_image(self, name: str) -> dict[str, Any]:
         result = self._run("image", "inspect", name)
         try:
