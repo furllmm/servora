@@ -88,3 +88,26 @@ def image_status(podman, manifest: AppManifest, root: str | Path) -> dict[str, A
                else "current")
     return {"app": manifest.name, "version": manifest.version,
             "status": overall, "services": services}
+
+
+
+def check_app_updates(podman, manifest: AppManifest, root: str | Path) -> dict[str, Any]:
+    """Refresh each unique app image reference and report update candidates.
+
+    This only refreshes the local image store; running containers are not changed.
+    """
+    before_state = load_app_state(root, manifest.name)
+    unique_images = sorted({service.image for service in manifest.services})
+    refreshed = []
+    for image in unique_images:
+        result = podman.refresh_image(image)
+        refreshed.append(result)
+    status = image_status(podman, manifest, root)
+    return {
+        "app": manifest.name,
+        "version": manifest.version,
+        "status": status["status"],
+        "refreshed": refreshed,
+        "services": status["services"],
+        "deployment_recorded": before_state is not None,
+    }
