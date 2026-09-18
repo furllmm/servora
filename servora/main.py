@@ -209,6 +209,14 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             p = self._require_podman()
+            if parsed.path == "/api/images/pull":
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = json.loads(self.rfile.read(length)) if length else {}
+                name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                result = p.pull_image(name)
+                audit.append("image.pull", "user", name=name, action="pull", summary="Container image pulled", details={"result": result})
+                return self._json({"name": name, "status": "pulled", "result": result})
+
             if parsed.path in {"/api/images/remove", "/api/volumes/remove", "/api/networks/remove"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = json.loads(self.rfile.read(length)) if length else {}
