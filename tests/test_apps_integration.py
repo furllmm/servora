@@ -103,3 +103,84 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
             podman.remove_network(network)
         except Exception:
             pass
+
+
+def _run_raw(podman: Podman, *args: str) -> str:
+    result = podman._run(*args)
+    return result.stdout.strip()
+
+
+def test_real_image_update_recreates_container_and_records_new_image(tmp_path: Path):
+    """Exercise deployment update against two real locally pulled images.
+
+    The test uses a temporary local tag and never relies on a mutable registry
+    tag. This makes update detection deterministic: the tag is first pointed
+    at Alpine 3.20, deployment state is captured, then the same tag is moved
+    to Alpine 3.21 before update_app_images() is called.
+    """
+    podman = _podman()
+    from servora.deployment import update_app_images
+
+    old_image = os.environ.get("SERVORA_OLD_IMAGE", "docker.io/library/alpine:3.20")
+    new_image = os.environ.get("SERVORA_NEW_IMAGE", "docker.io/library/alpine:3.21")
+    app = f"update-it-{uuid.uuid4().hex[:10]}"
+    local_tag = f"localhost/servora-it-{uuid.uuid4().hex[:12]}:latest"
+    container = f"servora-{app}-web"
+
+    manifest = {
+        "name": app,
+        "version": "1.0",
+        "description": "real image update integration test",
+        "services": [
+            {
+                "name": "web",
+                "image": local_tag,
+                "command": ["sh", "-c", "echo servora-update && sleep 60"],
+            }
+        ],
+    }
+    runtime = Runtime(tmp_path / "runtime", mode="user")
+    runtime.initialize()
+
+    try:
+        if not podman.image_exists(old_image):
+            podman.pull_image(old_image)
+        if not podman.image_exists(new_image):
+            podman.pull_image(new_image)
+
+        _run_raw(podman, "tag", old_image, local_tag)
+        result = install_app(podman, manifest, transaction_root=runtime.root)
+        assert result[0]["status"] == "created"
+
+        from servora.apps import validate_app_manifest
+        parsed = validate_app_manifest(manifest)
+        podman.start_container(container)
+        old_state = capture_app_state(podman, parsed, runtime.root)
+        old_id = old_state["services"][0]["image_id"]
+
+        _run_raw(podman, "tag", new_image, local_tag)
+        current = podman.image_metadata(local_tag)
+        assert current["id"] != old_id
+
+        status = image_status(podman, parsed, runtime.root)
+        assert status["status"] == "update_available"
+
+        update = update_app_images(podman, parsed, runtime.root)
+        assert update["status"] == "updated"
+        assert update["updated_services"] == ["web"]
+
+        health = podman.container_health(container)
+        assert health["running"] is True
+        assert "servora-update" in podman.container_logs(container, tail=20)
+
+        new_state = capture_app_state(podman, parsed, runtime.root)
+        assert new_state["services"][0]["image_id"] != old_id
+    finally:
+        try:
+            podman.remove_container(container, force=True)
+        except Exception:
+            pass
+        try:
+            podman.remove_image(local_tag, force=True)
+        except Exception:
+            pass
