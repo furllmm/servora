@@ -49,6 +49,16 @@ def test_image_digest_is_persisted(tmp_path):
     assert state["services"][0]["image_digest"] == "sha256:digest-one"
 
 
+def test_digest_mismatch_wins_over_matching_image_id(tmp_path):
+    p = DeploymentPodman("sha256:one")
+    p.digest = "sha256:digest-one"
+    capture_app_state(p, manifest(), tmp_path)
+    p.digest = "sha256:digest-two"
+    result = image_status(p, manifest(), tmp_path)
+    assert result["status"] == "update_available"
+    assert result["services"][0]["status"] == "update_available"
+
+
 def test_matching_digest_can_keep_status_current(tmp_path):
     p = DeploymentPodman("sha256:one")
     capture_app_state(p, manifest(), tmp_path)
