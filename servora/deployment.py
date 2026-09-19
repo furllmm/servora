@@ -72,10 +72,14 @@ def image_status(podman, manifest: AppManifest, root: str | Path) -> dict[str, A
             status = "not_recorded"
         elif not current_id and not current_digest:
             status = "unknown"
-        elif (recorded_id and current_id == recorded_id) or (recorded_digest and current_digest == recorded_digest):
-            status = "current"
+        elif recorded_digest and current_digest:
+            # When both digests are available, digest identity is authoritative.
+            # A matching container image ID alone must not hide a digest change.
+            status = "current" if current_digest == recorded_digest else "update_available"
+        elif recorded_id and current_id:
+            status = "current" if current_id == recorded_id else "update_available"
         else:
-            status = "update_available"
+            status = "unknown"
         services.append({"service": service.name, "image": service.image,
                          "recorded_image_id": recorded_id,
                          "current_image_id": current_id,
