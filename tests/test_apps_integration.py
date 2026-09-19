@@ -184,3 +184,79 @@ def test_real_image_update_recreates_container_and_records_new_image(tmp_path: P
             podman.remove_image(local_tag, force=True)
         except Exception:
             pass
+
+
+def test_real_image_update_failure_rolls_back_to_recorded_image(tmp_path: Path):
+    """Force the new image to exit and verify real rollback to the old ID."""
+    podman = _podman()
+    from servora.deployment import update_app_images
+    from servora.apps import validate_app_manifest
+
+    old_image = os.environ.get("SERVORA_OLD_IMAGE", "docker.io/library/alpine:3.20")
+    new_image = os.environ.get("SERVORA_NEW_IMAGE", "docker.io/library/alpine:3.21")
+    app = f"rollback-it-{uuid.uuid4().hex[:10]}"
+    local_tag = f"localhost/servora-rollback-{uuid.uuid4().hex[:12]}:latest"
+    container = f"servora-{app}-web"
+
+    manifest = {
+        "name": app,
+        "version": "1.0",
+        "description": "real rollback integration test",
+        "services": [
+            {
+                "name": "web",
+                "image": local_tag,
+                # Alpine 3.21 deliberately exits; Alpine 3.20 stays running.
+                "command": [
+                    "sh", "-c",
+                    "case \"$(cat /etc/alpine-release)\" in "
+                    3.21*) echo servora-new-failure; exit 1;; "
+                    *) echo servora-old-running; sleep 60;; "
+                    "esac",
+                ],
+            }
+        ],
+    }
+    runtime = Runtime(tmp_path / "runtime", mode="user")
+    runtime.initialize()
+
+    try:
+        if not podman.image_exists(old_image):
+            podman.pull_image(old_image)
+        if not podman.image_exists(new_image):
+            podman.pull_image(new_image)
+
+        _run_raw(podman, "tag", old_image, local_tag)
+        parsed = validate_app_manifest(manifest)
+        install_app(podman, manifest, transaction_root=runtime.root)
+        podman.start_container(container)
+
+        old_state = capture_app_state(podman, parsed, runtime.root)
+        old_id = old_state["services"][0]["image_id"]
+        assert old_id
+
+        _run_raw(podman, "tag", new_image, local_tag)
+        assert podman.image_metadata(local_tag)["id"] != old_id
+        assert image_status(podman, parsed, runtime.root)["status"] == "update_available"
+
+        with pytest.raises(RuntimeError, match="rollback succeeded"):
+            update_app_images(podman, parsed, runtime.root)
+
+        restored = podman.inspect_container(container)
+        assert restored["Image"] == old_id
+        health = podman.container_health(container)
+        assert health["running"] is True
+        assert "servora-old-running" in podman.container_logs(container, tail=20)
+
+        # The failed update must not replace the recorded deployment state.
+        recorded = capture_app_state(podman, parsed, runtime.root)
+        assert recorded["services"][0]["image_id"] == old_id
+    finally:
+        try:
+            podman.remove_container(container, force=True)
+        except Exception:
+            pass
+        try:
+            podman.remove_image(local_tag, force=True)
+        except Exception:
+            pass
