@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from servora.apps import install_app, uninstall_app
+from servora.apps import install_app, uninstall_app, validate_app_manifest
 from servora.podman import Podman, PodmanError
 from servora.runtime import Runtime
 from servora.deployment import capture_app_state, image_status
@@ -74,7 +74,7 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
         assert "servora-app-integration" in podman.container_logs(container, tail=20)
 
         # Deployment capture must work against real inspect/image metadata.
-        parsed = __import__("servora.apps", fromlist=["validate_app_manifest"]).validate_app_manifest(manifest)
+        parsed = validate_app_manifest(manifest)
         state = capture_app_state(podman, parsed, runtime.root)
         assert state["services"][0]["image_id"]
 
