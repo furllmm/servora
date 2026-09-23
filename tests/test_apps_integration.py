@@ -12,7 +12,7 @@ import pytest
 from servora.apps import install_app, uninstall_app, validate_app_manifest
 from servora.podman import Podman, PodmanError
 from servora.runtime import Runtime
-from servora.deployment import capture_app_state, image_status
+from servora.deployment import capture_app_state, image_status, load_deployment_state
 
 
 pytestmark = pytest.mark.integration
@@ -73,7 +73,6 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
         assert health["running"] is True
         assert "servora-app-integration" in podman.container_logs(container, tail=20)
 
-        # Deployment capture must work against real inspect/image metadata.
         parsed = validate_app_manifest(manifest)
         state = capture_app_state(podman, parsed, runtime.root)
         assert state["services"][0]["image_id"]
@@ -87,7 +86,6 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
         with pytest.raises(PodmanError):
             podman.inspect_container(container)
 
-        # uninstall preserves named volumes by design.
         assert podman.inspect_volume(volume)
         assert podman.inspect_network(network)
     finally:
@@ -111,13 +109,7 @@ def _run_raw(podman: Podman, *args: str) -> str:
 
 
 def test_real_image_update_recreates_container_and_records_new_image(tmp_path: Path):
-    """Exercise deployment update against two real locally pulled images.
-
-    The test uses a temporary local tag and never relies on a mutable registry
-    tag. This makes update detection deterministic: the tag is first pointed
-    at Alpine 3.20, deployment state is captured, then the same tag is moved
-    to Alpine 3.21 before update_app_images() is called.
-    """
+    """Exercise deployment update against two real locally pulled images."""
     podman = _podman()
     from servora.deployment import update_app_images
 
@@ -152,7 +144,6 @@ def test_real_image_update_recreates_container_and_records_new_image(tmp_path: P
         result = install_app(podman, manifest, transaction_root=runtime.root)
         assert result[0]["status"] == "created"
 
-        from servora.apps import validate_app_manifest
         parsed = validate_app_manifest(manifest)
         podman.start_container(container)
         old_state = capture_app_state(podman, parsed, runtime.root)
@@ -190,7 +181,6 @@ def test_real_image_update_failure_rolls_back_to_recorded_image(tmp_path: Path):
     """Force the new image to exit and verify real rollback to the old ID."""
     podman = _podman()
     from servora.deployment import update_app_images
-    from servora.apps import validate_app_manifest
 
     old_image = os.environ.get("SERVORA_OLD_IMAGE", "docker.io/library/alpine:3.20")
     new_image = os.environ.get("SERVORA_NEW_IMAGE", "docker.io/library/alpine:3.21")
@@ -206,12 +196,11 @@ def test_real_image_update_failure_rolls_back_to_recorded_image(tmp_path: Path):
             {
                 "name": "web",
                 "image": local_tag,
-                # Alpine 3.21 deliberately exits; Alpine 3.20 stays running.
                 "command": [
                     "sh", "-c",
                     "case \"$(cat /etc/alpine-release)\" in "
-                    3.21*) echo servora-new-failure; exit 1;; "
-                    *) echo servora-old-running; sleep 60;; "
+                    "3.21*) echo servora-new-failure; exit 1;; "
+                    "*) echo servora-old-running; sleep 60;; "
                     "esac",
                 ],
             }
@@ -248,8 +237,8 @@ def test_real_image_update_failure_rolls_back_to_recorded_image(tmp_path: Path):
         assert health["running"] is True
         assert "servora-old-running" in podman.container_logs(container, tail=20)
 
-        # The failed update must not replace the recorded deployment state.
-        recorded = capture_app_state(podman, parsed, runtime.root)
+        # Failed update must not replace the persisted deployment state.
+        recorded = load_deployment_state(runtime.root, parsed.name)
         assert recorded["services"][0]["image_id"] == old_id
     finally:
         try:
