@@ -366,9 +366,38 @@ def resolve_url(url: str) -> dict[str, Any]:
             result = import_source({"type": "oci_image", "image": docker, "url": url})
         except AIImportError as exc:
             raise SourceImportError(str(exc)) from exc
+        manifest = result.manifest
+        # Docker Hub repository metadata is optional; installation must not
+        # depend on a second metadata request succeeding.
+        source = {"type": "docker_hub", "url": url, "image": docker}
+        try:
+            parsed = urlparse(url)
+            parts = [p for p in parsed.path.split("/") if p]
+            if len(parts) == 3 and parts[0] == "r":
+                namespace, repository = parts[1], parts[2]
+            elif len(parts) == 2 and parts[0] == "_":
+                namespace, repository = "library", parts[1]
+            else:
+                namespace = repository = ""
+            if namespace and repository:
+                metadata_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repository}/"
+                _, metadata_data, _ = _fetch(metadata_url, "application/json")
+                metadata = json.loads(metadata_data.decode("utf-8"))
+                if isinstance(metadata, dict):
+                    description = metadata.get("description") or metadata.get("full_description")
+                    if description:
+                        manifest["description"] = str(description)[:1000]
+                    manifest.setdefault("metadata", {})["source_digest"] = metadata.get("last_updated")
+                    source["repository"] = f"{namespace}/{repository}"
+        except (SourceImportError, UnicodeDecodeError, json.JSONDecodeError, OSError, ValueError):
+            pass
+        manifest.setdefault("metadata", {}).update({
+            "source_type": "docker_hub",
+            "docker_hub_url": url,
+        })
         return {
-            "manifest": result.manifest,
-            "source": {"type": "oci_image", "url": url, "image": docker},
+            "manifest": manifest,
+            "source": source,
             "findings": [f.to_dict() for f in result.findings],
             "requires_approval": result.requires_approval,
         }
