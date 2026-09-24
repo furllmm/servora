@@ -426,13 +426,25 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"status": "approved", **result.to_dict(), "marketplace": entry.to_dict()}, 201)
 
                 if parsed.path == "/api/marketplace/import":
-                    url = raw.get("url") if isinstance(raw, dict) else None
-                    imported = marketplace.import_remote(url)
-                    for entry in imported:
-                        audit.append("marketplace.import", "user", name=entry.name, action="import",
-                                     summary="Remote marketplace entry imported",
-                                     details={"remote_url": entry.source.get("remote_url")})
-                    return self._json({"status": "imported", "entries": [entry.to_dict() for entry in imported]}, 201)
+                    urls = raw.get("urls") if isinstance(raw, dict) else None
+                    if urls is None and isinstance(raw, dict):
+                        urls = [raw.get("url")]
+                    result = marketplace.import_urls(urls)
+                    for entry in result["imported"]:
+                        audit.append(
+                            "marketplace.import",
+                            "user",
+                            name=entry.name,
+                            action="import",
+                            summary="Installation URL imported into marketplace",
+                            details={"source": entry.source.get("url") or entry.source.get("remote_url"),
+                                     "type": entry.source.get("type")},
+                        )
+                    return self._json({
+                        "status": "imported",
+                        "entries": [entry.to_dict() for entry in result["imported"]],
+                        "errors": result["errors"],
+                    }, 201)
                 if parsed.path == "/api/marketplace/publish":
                     entry = marketplace.publish(raw)
                     audit.append("marketplace.publish", "user", name=entry.name, action="publish", summary="Marketplace entry published")
