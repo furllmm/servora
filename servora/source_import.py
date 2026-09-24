@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import ipaddress
+import json
+import socket
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+from .ai_import import AIImportError, import_source
+
+
+_MAX_BYTES = 4 * 1024 * 1024
+_TIMEOUT = 15
+_COMPOSE_NAMES = (
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+)
+
+
+class SourceImportError(ValueError):
+    pass
+
+
+def _validate_url(url: Any) -> str:
+    if not isinstance(url, str) or len(url) > 2048:
+        raise SourceImportError("Import URL is invalid")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise SourceImportError("Import URL must use HTTPS without embedded credentials")
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SourceImportError(f"Could not resolve import host: {exc}") from exc
+    for address in {item[4][0] for item in addresses}:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise SourceImportError("Import host resolves to a non-public address")
+    return url
+
+
+def _fetch(url: str, accept: str = "*/*") -> tuple[str, bytes, dict[str, str]]:
+    url = _validate_url(url)
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": accept, "User-Agent": "Servora-Marketplace/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+            final = response.geturl()
+            _validate_url(final)
+            length = response.headers.get("Content-Length")
+            if length and int(length) > _MAX_BYTES:
+                raise SourceImportError("Remote source is too large")
+            data = response.read(_MAX_BYTES + 1)
+            content_type = response.headers.get("Content-Type", "")
+    except SourceImportError:
+        raise
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise SourceImportError(f"Could not fetch import source: {exc}") from exc
+    if len(data) > _MAX_BYTES:
+        raise SourceImportError("Remote source is too large")
+    return final, data, {"content_type": content_type}
+
+
+def _parse_document(data: bytes, url: str) -> dict[str, Any]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SourceImportError("Import source is not valid UTF-8 text") from exc
+
+    suffix = Path(urlparse(url).path).suffix.lower()
+    try_json = suffix == ".json" or "json" in url.lower().split("?")[0]
+    if try_json:
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SourceImportError("Import source is not valid JSON") from exc
+    else:
+        try:
+            import yaml
+        except ImportError as exc:
+            raise SourceImportError("YAML import requires the PyYAML dependency") from exc
+        try:
+            raw = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise SourceImportError(f"Import source is not valid YAML: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise SourceImportError("Import source must contain an object")
+    return raw
+
+
+def _github_repo(url: str) -> tuple[str, str] | None:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return None
+
+
+def _github_raw(url: str) -> bool:
+    return urlparse(url).hostname == "raw.githubusercontent.com"
+
+
+def _github_api(repo: tuple[str, str]) -> dict[str, Any]:
+    owner, name = repo
+    api = f"https://api.github.com/repos/{owner}/{name}"
+    _, data, _ = _fetch(api, "application/vnd.github+json")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SourceImportError("GitHub repository metadata is invalid") from exc
+    if not isinstance(raw, dict) or not raw.get("default_branch"):
+        raise SourceImportError("GitHub repository metadata is incomplete")
+    return raw
+
+
+def _github_raw_file(owner: str, repo: str, branch: str, path: str) -> tuple[str, dict[str, Any]]:
+    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+    final, data, _ = _fetch(raw_url)
+    return final, _parse_document(data, final)
+
+
+def _manifest_from_document(document: dict[str, Any], source_label: str, source_url: str) -> dict[str, Any]:
+    if "services" in document:
+        source = {
+            "type": "compose",
+            "raw": document,
+            "url": source_url,
+            "name": document.get("name") or source_label,
+        }
+        try:
+            result = import_source(source)
+        except AIImportError as exc:
+            raise SourceImportError(str(exc)) from exc
+        return result.to_dict()
+
+    if "manifest" in document and isinstance(document["manifest"], dict):
+        return _manifest_from_document(document["manifest"], source_label, source_url)
+
+    raise SourceImportError("URL does not contain a supported Compose document or Servora manifest")
+
+
+def _docker_image_reference(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"hub.docker.com", "www.docker.com"}:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) == 3 and parts[0] == "r":
+        return f"{parts[1]}/{parts[2]}:latest"
+    if len(parts) == 2 and parts[0] == "_":
+        return f"{parts[1]}:latest"
+    return None
+
+
+def resolve_url(url: str) -> dict[str, Any]:
+    url = _validate_url(url)
+
+    docker = _docker_image_reference(url)
+    if docker:
+        try:
+            result = import_source({"type": "oci_image", "image": docker, "url": url})
+        except AIImportError as exc:
+            raise SourceImportError(str(exc)) from exc
+        return {
+            "manifest": result.manifest,
+            "source": {"type": "oci_image", "url": url, "image": docker},
+            "findings": [f.to_dict() for f in result.findings],
+            "requires_approval": result.requires_approval,
+        }
+
+    repo = _github_repo(url)
+    if repo:
+        metadata = _github_api(repo)
+        owner, name = repo
+        branch = str(metadata["default_branch"])
+        for filename in _COMPOSE_NAMES:
+            try:
+                raw_url, document = _github_raw_file(owner, name, branch, filename)
+                result = _manifest_from_document(document, name, raw_url)
+                result["source"] = {
+                    "type": "github_compose",
+                    "url": url,
+                    "file_url": raw_url,
+                    "repository": f"{owner}/{name}",
+                    "branch": branch,
+                }
+                return result
+            except SourceImportError:
+                continue
+        raise SourceImportError("GitHub repository has no supported Compose file at its root")
+
+    if _github_raw(url):
+        final, data, _ = _fetch(url)
+        document = _parse_document(data, final)
+        result = _manifest_from_document(document, Path(urlparse(final).path).stem, final)
+        result["source"] = {"type": "github_raw", "url": final}
+        return result
+
+    final, data, headers = _fetch(url)
+    document = _parse_document(data, final)
+    result = _manifest_from_document(document, Path(urlparse(final).path).stem or "imported-app", final)
+    result["source"] = {
+        "type": "remote_compose",
+        "url": final,
+        "content_type": headers["content_type"],
+    }
+    return result
