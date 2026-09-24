@@ -246,15 +246,16 @@ def _check_resource_conflict(podman, resource_type: str, name: str, app_name: st
         return
     try:
         info = inspect(name)
-    except Exception:
-        return
+    except Exception as exc:
+        raise AppManifestError(
+            f"Could not inspect existing {resource_type} '{name}'; refusing to assume it is safe to reuse: {exc}"
+        ) from exc
     prefix = f"servora-{app_name}-"
     conflicts = sorted(x for x in _resource_users(info) if x and not x.startswith(prefix))
     if conflicts:
         raise AppManifestError(
             f"{resource_type.capitalize()} '{name}' is already used by another container: {conflicts[0]}"
         )
-
 
 
 def _ensure_images(podman, manifest: AppManifest) -> list[dict[str, Any]]:
@@ -271,6 +272,7 @@ def _ensure_images(podman, manifest: AppManifest) -> list[dict[str, Any]]:
         result = pull_image(image)
         results.append({"image": image, "status": "pulled", "result": result})
     return results
+
 
 def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
@@ -341,7 +343,6 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
                 except Exception:
                     pass
         raise
-    return results
 
 
 def _installed_container_names(podman) -> set[str]:
@@ -408,6 +409,7 @@ def restart_app(podman, manifest: AppManifest) -> dict[str, Any]:
         "partial" if stopped["status"] == "partial" or started["status"] == "partial" else "ok"
     )
     return {"app": manifest.name, "action": "restart", "status": status, "stop": stopped, "start": started}
+
 
 def app_health(podman, manifest: AppManifest) -> dict[str, Any]:
     """Aggregate the runtime health of every service in an installed app."""
@@ -480,7 +482,6 @@ def uninstall_app(podman, manifest: AppManifest, *, remove_volumes: bool = False
             podman.remove_container(name, force=True)
             removed.append(name)
         except Exception:
-            # Missing containers should not make uninstall fail.
             pass
 
     removed_volumes = []
@@ -494,7 +495,6 @@ def uninstall_app(podman, manifest: AppManifest, *, remove_volumes: bool = False
                 except Exception:
                     pass
 
-    # Networks are intentionally opt-in because they may be shared.
     removed_networks = []
     if remove_networks:
         remove_network = getattr(podman, "remove_network", None)
@@ -516,7 +516,6 @@ def update_app(podman, old_manifest: AppManifest, raw_manifest: dict[str, Any], 
     new_manifest = validate_app_manifest(raw_manifest)
     if new_manifest.name != old_manifest.name:
         raise AppManifestError("App name cannot change during update")
-    # Prepare new images before removing the working old stack.
     try:
         _ensure_images(podman, new_manifest)
     except Exception as exc:
