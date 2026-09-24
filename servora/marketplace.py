@@ -3,19 +3,69 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
 import re
+import ipaddress
+import socket
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
 
 _CATEGORIES = {"official", "community", "ai_imported"}
 _VERIFICATION = {"verified", "community", "ai_imported", "risk_detected"}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_MAX_REMOTE_BYTES = 1024 * 1024
+_REMOTE_TIMEOUT = 15
 
 
 class MarketplaceError(ValueError):
     pass
 
+
+def _validate_remote_url(url: Any) -> str:
+    if not isinstance(url, str) or len(url) > 2048:
+        raise MarketplaceError("Remote marketplace URL is invalid")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise MarketplaceError("Remote marketplace URL must use HTTPS without embedded credentials")
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise MarketplaceError(f"Could not resolve marketplace host: {exc}") from exc
+    for address in {item[4][0] for item in addresses}:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise MarketplaceError("Marketplace host resolved to an invalid address") from exc
+        if not ip.is_global:
+            raise MarketplaceError("Marketplace host resolves to a non-public address")
+    return url
+
+
+def _fetch_remote_json(url: str) -> dict[str, Any]:
+    url = _validate_remote_url(url)
+    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Servora-Marketplace/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=_REMOTE_TIMEOUT) as response:
+            final_url = response.geturl()
+            _validate_remote_url(final_url)
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > _MAX_REMOTE_BYTES:
+                raise MarketplaceError("Remote marketplace document is too large")
+            data = response.read(_MAX_REMOTE_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        raise MarketplaceError(f"Could not fetch marketplace document: {exc}") from exc
+    if len(data) > _MAX_REMOTE_BYTES:
+        raise MarketplaceError("Remote marketplace document is too large")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MarketplaceError("Remote marketplace document is not valid UTF-8 JSON") from exc
+    if not isinstance(raw, dict):
+        raise MarketplaceError("Remote marketplace document must be a JSON object")
+    return raw
 
 @dataclass(frozen=True)
 class MarketplaceEntry:
@@ -147,6 +197,20 @@ class MarketplaceStore:
         if entry is None:
             raise MarketplaceError("Marketplace app not found")
         return {"format": "servora-marketplace-v1", "entry": entry.to_dict()}
+
+    def import_remote(self, url: str) -> list[MarketplaceEntry]:
+        """Import one or more validated entries from a public HTTPS JSON document."""
+        raw = _fetch_remote_json(url)
+        items = raw.get("entries") if isinstance(raw.get("entries"), list) else [raw]
+        if not items:
+            raise MarketplaceError("Remote marketplace document contains no entries")
+        imported = []
+        for item in items:
+            entry = validate_entry(item)
+            source = dict(entry.source)
+            source.setdefault("remote_url", url)
+            imported.append(self.save({**entry.to_dict(), "source": source}))
+        return imported
 
     def seed(self, entries: list[dict[str, Any]]) -> None:
         for entry in entries:
