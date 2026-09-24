@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
-from .source_import import SourceImportError, resolve_url
+from .source_import import SourceImportError, _fetch as _fetch_source, resolve_url
 
 _CATEGORIES = {"official", "community", "ai_imported"}
 _VERIFICATION = {"verified", "community", "ai_imported", "risk_detected"}
@@ -94,18 +94,13 @@ def import_url(url: str) -> MarketplaceEntry:
     })
 
 def _fetch_remote_json(url: str) -> dict[str, Any]:
-    url = _validate_remote_url(url)
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Servora-Marketplace/1"})
+    """Fetch the legacy marketplace JSON format using the hardened source fetcher."""
     try:
-        with urllib.request.urlopen(request, timeout=_REMOTE_TIMEOUT) as response:
-            final_url = response.geturl()
-            _validate_remote_url(final_url)
-            content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > _MAX_REMOTE_BYTES:
-                raise MarketplaceError("Remote marketplace document is too large")
-            data = response.read(_MAX_REMOTE_BYTES + 1)
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        raise MarketplaceError(f"Could not fetch marketplace document: {exc}") from exc
+        final_url, data, _ = _fetch_source(url, "application/json")
+    except SourceImportError as exc:
+        raise MarketplaceError(str(exc)) from exc
+    if final_url != url and not final_url.startswith("https://"):
+        raise MarketplaceError("Remote marketplace URL resolved to an invalid scheme")
     if len(data) > _MAX_REMOTE_BYTES:
         raise MarketplaceError("Remote marketplace document is too large")
     try:
