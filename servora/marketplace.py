@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+_DOCKER_HUB_HOSTS = {"hub.docker.com", "www.docker.com"}
+
 from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
 
 _CATEGORIES = {"official", "community", "ai_imported"}
@@ -42,6 +44,106 @@ def _validate_remote_url(url: Any) -> str:
         if not ip.is_global:
             raise MarketplaceError("Marketplace host resolves to a non-public address")
     return url
+
+
+def _docker_hub_reference(url: str) -> tuple[str, str] | None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in _DOCKER_HUB_HOSTS:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 3 and parts[0] == "r":
+        namespace, repository = parts[1], parts[2]
+    elif len(parts) >= 2 and parts[0] == "_":
+        namespace, repository = "library", parts[1]
+    else:
+        return None
+    if not _SLUG.fullmatch(namespace) or not _SLUG.fullmatch(repository):
+        raise MarketplaceError("Invalid Docker Hub repository URL")
+    return namespace, repository
+
+
+def _fetch_docker_hub_repository(url: str) -> dict[str, Any]:
+    ref = _docker_hub_reference(url)
+    if ref is None:
+        raise MarketplaceError("URL is not a supported Docker Hub repository URL")
+    namespace, repository = ref
+    api_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repository}/"
+    request = urllib.request.Request(api_url, headers={"Accept": "application/json", "User-Agent": "Servora-Marketplace/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=_REMOTE_TIMEOUT) as response:
+            data = response.read(_MAX_REMOTE_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise MarketplaceError(f"Could not read Docker Hub repository: {exc}") from exc
+    if len(data) > _MAX_REMOTE_BYTES:
+        raise MarketplaceError("Docker Hub repository metadata is too large")
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MarketplaceError("Docker Hub repository metadata is not valid JSON") from exc
+    if not isinstance(raw, dict):
+        raise MarketplaceError("Docker Hub repository metadata must be an object")
+    return raw
+
+
+def _docker_hub_manifest(url: str) -> dict[str, Any]:
+    raw = _fetch_docker_hub_repository(url)
+    ref = _docker_hub_reference(url)
+    assert ref is not None
+    namespace, repository = ref
+    image = f"{namespace}/{repository}:latest"
+    name = _slug(repository)
+    description = str(raw.get("description") or raw.get("full_description") or f"Docker Hub image {image}")
+    return {
+        "name": name,
+        "version": "1.0.0",
+        "description": description[:1000],
+        "metadata": {
+            "source_type": "docker_hub",
+            "docker_hub_url": url,
+            "repository": f"{namespace}/{repository}",
+            "source_digest": raw.get("last_updated"),
+        },
+        "services": [{
+            "name": "app",
+            "image": image,
+            "ports": [],
+            "volumes": [],
+            "environment": {},
+            "networks": [],
+            "command": [],
+            "depends_on": [],
+        }],
+    }
+
+
+def import_url(url: str) -> MarketplaceEntry:
+    """Resolve a supported installation URL into a validated marketplace entry."""
+    docker = _docker_hub_reference(url)
+    if docker is not None:
+        raw_manifest = _docker_hub_manifest(url)
+        return validate_entry({
+            "name": raw_manifest["name"],
+            "category": "community",
+            "verification": "community",
+            "manifest": raw_manifest,
+            "source": {
+                "type": "docker_hub",
+                "url": url,
+                "repository": f"{docker[0]}/{docker[1]}",
+                "imported_by": "servora",
+            },
+            "tags": ["docker-hub", "imported"],
+        })
+    raw = _fetch_remote_json(url)
+    items = raw.get("entries") if isinstance(raw.get("entries"), list) else [raw]
+    if len(items) != 1:
+        raise MarketplaceError("Use a marketplace document with one entry for this URL")
+    entry = validate_entry(items[0])
+    source = dict(entry.source)
+    source.setdefault("url", url)
+    source.setdefault("imported_by", "servora")
+    return MarketplaceEntry(entry.name, entry.version, entry.description, entry.category,
+                            entry.verification, entry.manifest, source, entry.tags)
 
 
 def _fetch_remote_json(url: str) -> dict[str, Any]:
@@ -198,8 +300,38 @@ class MarketplaceStore:
             raise MarketplaceError("Marketplace app not found")
         return {"format": "servora-marketplace-v1", "entry": entry.to_dict()}
 
+    def import_url(self, url: str) -> MarketplaceEntry:
+        entry = import_url(url)
+        source = dict(entry.source)
+        source.setdefault("remote_url", url)
+        return self.save({**entry.to_dict(), "source": source})
+
+    def import_urls(self, urls: list[str]) -> dict[str, Any]:
+        if not isinstance(urls, list) or not urls:
+            raise MarketplaceError("At least one import URL is required")
+        if len(urls) > 20:
+            raise MarketplaceError("A maximum of 20 URLs can be imported at once")
+        imported: list[MarketplaceEntry] = []
+        errors: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for raw_url in urls:
+            if not isinstance(raw_url, str):
+                errors.append({"url": str(raw_url), "error": "URL must be a string"})
+                continue
+            url = raw_url.strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            try:
+                imported.append(self.import_url(url))
+            except MarketplaceError as exc:
+                errors.append({"url": url, "error": str(exc)})
+        if not imported and errors:
+            raise MarketplaceError(json.dumps({"imported": [], "errors": errors}))
+        return {"imported": imported, "errors": errors}
+
     def import_remote(self, url: str) -> list[MarketplaceEntry]:
-        """Import one or more validated entries from a public HTTPS JSON document."""
+        """Import one or more validated entries from a public HTTPS marketplace document."""
         raw = _fetch_remote_json(url)
         items = raw.get("entries") if isinstance(raw.get("entries"), list) else [raw]
         if not items:
