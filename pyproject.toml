@@ -6,5 +6,6 @@ name = "servora"
 version = "0.1.25"
 description = "Lightweight Podman homelab manager"
 requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
