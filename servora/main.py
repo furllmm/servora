@@ -100,6 +100,9 @@ class Handler(BaseHTTPRequestHandler):
                 category = q.get("category", [None])[0]
                 query = q.get("q", [None])[0]
                 return self._json([x.to_dict() for x in marketplace.list(category=category, query=query)])
+            if parsed.path == "/api/marketplace/download":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                return self._json(marketplace.download(name))
             if parsed.path == "/api/marketplace/get":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 entry = marketplace.get(name)
@@ -259,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = p.remove_network(name)
                 return self._json({"name": name, "result": result})
 
-            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/marketplace/fork", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -405,6 +408,13 @@ class Handler(BaseHTTPRequestHandler):
 
                 if parsed.path == "/api/marketplace/publish":
                     entry = marketplace.publish(raw)
+                    audit.append("marketplace.publish", "user", name=entry.name, action="publish", summary="Marketplace entry published")
+                    return self._json(entry.to_dict(), 201)
+                if parsed.path == "/api/marketplace/fork":
+                    source = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    new_name = _name(raw.get("new_name", "") if isinstance(raw, dict) else "")
+                    entry = marketplace.fork(source, new_name)
+                    audit.append("marketplace.fork", "user", name=entry.name, action="fork", summary="Marketplace entry forked", details={"source": source})
                     return self._json(entry.to_dict(), 201)
                 if parsed.path in {"/api/apps/start", "/api/apps/stop", "/api/apps/restart"}:
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
