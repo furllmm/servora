@@ -7,7 +7,7 @@
 <div class="card"><div class="row"><h2>Containers</h2><button onclick="loadContainers()">Refresh</button></div><div id="containers" class="muted">Loading…</div></div><div class="card"><div class="row"><h2>Podman Resources</h2><button onclick="loadResources()">Refresh</button></div><div id="resources" class="grid"><div class="muted">Loading…</div></div></div>
 <div class="card"><h2>✨ Create Container with AI</h2><p class="muted">Describe the container you want. Servora generates a restricted plan, validates it, checks risks, then asks for approval when needed.</p><textarea id="aiCreatePrompt" style="width:100%;min-height:90px;box-sizing:border-box;background:#101319;color:#fff;border:1px solid #333;border-radius:8px;padding:10px" placeholder="Örn: nginx çalıştır, 8080 portundan aç"></textarea><div class="row"><button onclick="aiCreate(false)">Generate Plan</button><button id="aiCreateApprove" onclick="aiCreate(true)" style="display:none">Approve & Launch</button></div><div id="aiCreateResult" class="muted"></div></div>
 <div class="card"><div class="row"><h2>Installed Apps</h2><button onclick="loadApps()">Refresh</button></div><div id="apps" class="muted">Loading…</div></div>
-<div class="card"><div class="row"><h2>Marketplace</h2><button onclick="loadMarketplace()">Refresh</button></div><div class="row"><input id="marketSearch" placeholder="Search apps" style="flex:1"><button onclick="loadMarketplace()">Search</button></div><div id="marketplace" class="muted">Loading…</div></div>
+<div class="card"><div class="row"><h2>Marketplace</h2><button onclick="loadMarketplace()">Refresh</button></div><div class="row"><input id="marketSearch" placeholder="Search apps" style="flex:1"><button onclick="loadMarketplace()">Search</button><input id="marketRemoteUrl" placeholder="Public HTTPS marketplace JSON" style="flex:1;min-width:260px"><button onclick="marketImportRemote()">Import source</button></div><div id="marketplace" class="muted">Loading…</div></div>
 <div class="card"><h2>AI Import</h2><p class="muted">Convert an OCI image or a Compose JSON document into a Servora manifest. Risky findings require explicit approval.</p><textarea id="aiSource" style="width:100%;min-height:150px;box-sizing:border-box;background:#101319;color:#fff;border:1px solid #333;border-radius:8px;padding:10px">{
   "type": "oci_image",
   "image": "nginx:alpine",
@@ -50,6 +50,18 @@ async function loadResources(){const box=document.getElementById('resources');tr
 async function resourceInspect(kind,name){try{const d=await api('/api/'+kind+'/inspect?name='+name);document.getElementById('details').innerHTML='<pre>'+esc(JSON.stringify(d,null,2))+'</pre>'}catch(e){document.getElementById('details').innerHTML='<span class="danger">'+esc(e.message)+'</span>'}}
 async function removeResource(kind,name){const decoded=decodeURIComponent(name);if(!confirm('Remove '+decoded+'? This may be destructive.'))return;try{const d=await api('/api/'+kind+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:decoded,force:false})});document.getElementById('details').innerHTML='<pre>'+esc(JSON.stringify(d,null,2))+'</pre>';await loadResources();await loadAudit()}catch(e){document.getElementById('details').innerHTML='<span class="danger">'+esc(e.message)+'</span>';await loadResources()}}
 
+async function marketImportRemote(){
+ const url=document.getElementById('marketRemoteUrl').value.trim();
+ const box=document.getElementById('marketplace');
+ if(!url){box.innerHTML='<span class="danger">Enter a public HTTPS marketplace JSON URL.</span>';return}
+ if(!url.startsWith('https://')){box.innerHTML='<span class="danger">Only HTTPS marketplace sources are allowed.</span>';return}
+ box.textContent='Importing marketplace source…';
+ try{
+  const d=await api('/api/marketplace/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+  box.innerHTML='<pre>'+esc(JSON.stringify(d,null,2))+'</pre>';
+  await loadMarketplace();await loadAudit();
+ }catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}
+}
 async function loadMarketplace(){const box=document.getElementById('marketplace');try{const q=document.getElementById('marketSearch').value.trim();const xs=await api('/api/marketplace'+(q?'?q='+encodeURIComponent(q):''));if(!xs.length){box.textContent='No marketplace entries.';return}box.innerHTML=xs.map(e=>`<div class="card"><b>${esc(e.name)}</b> <span class="pill">v${esc(e.version)}</span> <span class="pill">${esc(e.category)}</span> <span class="pill">${esc(e.verification)}</span><div class="muted">${esc(e.description||'')}</div><button onclick="marketLoad('${esc(e.name)}')">View manifest</button><button onclick="marketInstall('${esc(e.name)}')">Install</button><button onclick="marketFork('${esc(e.name)}')">Fork & Edit</button></div>`).join('')}catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}}
 async function marketLoad(name){try{const e=await api('/api/marketplace/get?name='+encodeURIComponent(name));document.getElementById('manifest').value=JSON.stringify(e.manifest,null,2);document.getElementById('appResult').textContent='Marketplace manifest loaded.'}catch(e){document.getElementById('appResult').textContent=e.message}}
 async function marketInstall(name){
