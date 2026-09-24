@@ -107,6 +107,19 @@ def _github_repo(url: str) -> tuple[str, str] | None:
     return None
 
 
+def _github_file(url: str) -> tuple[str, str, str, str] | None:
+    parsed = urlparse(url)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) >= 5 and parts[2] == "blob":
+        owner, repo, _, branch = parts[:4]
+        path = "/".join(parts[4:])
+        if owner and repo and branch and path:
+            return owner, repo, branch, path
+    return None
+
+
 def _github_raw(url: str) -> bool:
     return urlparse(url).hostname == "raw.githubusercontent.com"
 
@@ -328,10 +341,28 @@ def resolve_url(url: str) -> dict[str, Any]:
             "requires_approval": result.requires_approval,
         }
 
-    repo = _github_repo(url)
-    if repo:
-        metadata = _github_api(repo)
-        owner, name = repo
+    github_file = _github_file(url)
+    if github_file:
+        owner, repo, branch, path = github_file
+        try:
+            final, document = _github_raw_file(owner, repo, branch, path)
+        except SourceImportError as exc:
+            raise SourceImportError(f"GitHub file could not be imported: {exc}") from exc
+        result = _manifest_from_document(document, Path(path).stem, final)
+        result["source"] = {
+            "type": "github_file",
+            "url": url,
+            "file_url": final,
+            "repository": f"{owner}/{repo}",
+            "branch": branch,
+            "path": path,
+        }
+        return result
+
+    repo_info = _github_repo(url)
+    if repo_info:
+        metadata = _github_api(repo_info)
+        owner, name = repo_info
         branch = str(metadata["default_branch"])
         for filename in _COMPOSE_NAMES:
             try:
