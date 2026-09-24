@@ -36,3 +36,32 @@ def test_marketplace_rejects_duplicate_fork(tmp_path):
 def test_marketplace_entry_validation(tmp_path):
     validated = validate_entry(entry())
     assert validated.manifest["name"] == "demo"
+
+from servora.marketplace import MarketplaceStore
+
+def _entry(name="demo", verification="community"):
+    return {
+        "name": name,
+        "category": "community",
+        "verification": verification,
+        "description": "Demo",
+        "tags": ["web"],
+        "source": {"type": "oci", "image": "nginx:alpine"},
+        "manifest": {
+            "name": name,
+            "version": "1.0.0",
+            "description": "Demo",
+            "services": [{"name": "web", "image": "nginx:alpine"}],
+        },
+    }
+
+def test_marketplace_store_keeps_installable_manifest(tmp_path):
+    store = MarketplaceStore(tmp_path)
+    saved = store.publish(_entry())
+    assert saved.manifest["name"] == "demo"
+    assert store.get("demo").manifest["services"][0]["image"] == "nginx:alpine"
+
+def test_marketplace_risk_entry_is_marked_for_approval(tmp_path):
+    store = MarketplaceStore(tmp_path)
+    saved = store.publish(_entry("risky", "risk_detected"))
+    assert saved.verification == "risk_detected"
