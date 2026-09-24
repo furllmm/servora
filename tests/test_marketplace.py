@@ -106,3 +106,18 @@ services:
     saved = store.import_url("https://example.com/compose.yml")
     assert saved.verification == "risk_detected"
     assert saved.source["findings"]
+
+
+def test_marketplace_imports_docker_run_from_readme(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    readme = b"Install:\n\n    docker run -d --name web -p 8080:80 nginx:alpine\n"
+    def fake_fetch(url, accept="*/*"):
+        return url, readme, {"content_type": "text/plain"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url("https://example.com/README.md")
+    assert saved.manifest["services"][0]["image"] == "nginx:alpine"
+    assert saved.manifest["services"][0]["ports"][0]["host"] == 8080
+    assert saved.source["type"] == "docker_run"
