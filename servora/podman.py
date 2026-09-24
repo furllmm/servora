@@ -120,6 +120,21 @@ class Podman:
             "size": data.get("Size"),
         }
 
+    @staticmethod
+    def _image_identity_changed(before: dict[str, Any] | None, after: dict[str, Any]) -> bool:
+        """Compare image identity with digest taking precedence over local ID."""
+        if not before:
+            return False
+        before_digest = before.get("digest")
+        after_digest = after.get("digest")
+        if before_digest and after_digest:
+            return before_digest != after_digest
+        before_id = before.get("id")
+        after_id = after.get("id")
+        if before_id and after_id:
+            return before_id != after_id
+        return False
+
     def refresh_image(self, name: str) -> dict[str, Any]:
         """Pull a tag/reference and report whether its resolved local image changed."""
         before = None
@@ -129,8 +144,7 @@ class Podman:
             pass
         result = self.pull_image(name)
         after = self.image_metadata(name)
-        changed = bool(before and (before.get("id") or before.get("digest")) !=
-                       (after.get("id") or after.get("digest")))
+        changed = self._image_identity_changed(before, after)
         return {
             "name": name,
             "status": "updated" if changed else ("unchanged" if before else "pulled"),
@@ -210,7 +224,6 @@ class Podman:
         if name:
             args.append(name)
         return self._json_lines(*args)
-
 
     def create_container(self, plan: dict[str, Any]) -> str:
         name = str(plan.get("name", ""))
