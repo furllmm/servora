@@ -65,3 +65,44 @@ def test_marketplace_risk_entry_is_marked_for_approval(tmp_path):
     store = MarketplaceStore(tmp_path)
     saved = store.publish(_entry("risky", "risk_detected"))
     assert saved.verification == "risk_detected"
+
+
+def test_marketplace_imports_remote_compose(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    compose = b"""
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+"""
+    def fake_fetch(url, accept="*/*"):
+        return url, compose, {"content_type": "text/yaml"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url("https://example.com/compose.yml")
+    assert saved.manifest["name"] == "compose"
+    assert saved.manifest["services"][0]["image"] == "nginx:alpine"
+    assert saved.manifest["services"][0]["ports"][0]["host"] == 8080
+    assert saved.source["type"] == "remote_compose"
+
+
+def test_marketplace_import_marks_risky_compose(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    compose = b"""
+services:
+  daemon:
+    image: alpine:latest
+    privileged: true
+"""
+    def fake_fetch(url, accept="*/*"):
+        return url, compose, {"content_type": "text/yaml"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url("https://example.com/compose.yml")
+    assert saved.verification == "risk_detected"
+    assert saved.source["findings"]
