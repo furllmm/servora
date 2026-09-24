@@ -103,6 +103,25 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/marketplace/download":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 return self._json(marketplace.download(name))
+            if parsed.path == "/api/marketplace/install-preview":
+                name = _name(parse_qs(parsed.query).get("name", [""])[0])
+                entry = marketplace.get(name)
+                if entry is None:
+                    raise MarketplaceError("Marketplace app not found")
+                manifest = validate_app_manifest(entry.manifest)
+                already_installed = app_store.get(manifest.name) is not None
+                p = self._require_podman()
+                preflight = preflight_manifest(p, manifest, runtime.root)
+                requires_approval = entry.verification == "risk_detected"
+                return self._json({
+                    "status": "approval_required" if requires_approval else "ready",
+                    "marketplace": entry.to_dict(),
+                    "manifest": entry.manifest,
+                    "preflight": preflight,
+                    "already_installed": already_installed,
+                    "requires_approval": requires_approval,
+                }, 409 if requires_approval else 200)
+
             if parsed.path == "/api/marketplace/get":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 entry = marketplace.get(name)
@@ -416,23 +435,6 @@ class Handler(BaseHTTPRequestHandler):
                     entry = marketplace.fork(source, new_name)
                     audit.append("marketplace.fork", "user", name=entry.name, action="fork", summary="Marketplace entry forked", details={"source": source})
                     return self._json(entry.to_dict(), 201)
-                if parsed.path == "/api/marketplace/install-preview":
-                    name = _name(parse_qs(parsed.query).get("name", [""])[0])
-                    entry = marketplace.get(name)
-                    if entry is None:
-                        raise MarketplaceError("Marketplace app not found")
-                    manifest = validate_app_manifest(entry.manifest)
-                    already_installed = app_store.get(manifest.name) is not None
-                    preflight = preflight_manifest(p, manifest, runtime.root)
-                    requires_approval = entry.verification == "risk_detected"
-                    return self._json({
-                        "status": "approval_required" if requires_approval else "ready",
-                        "marketplace": entry.to_dict(),
-                        "manifest": entry.manifest,
-                        "preflight": preflight,
-                        "already_installed": already_installed,
-                        "requires_approval": requires_approval,
-                    }, 409 if requires_approval else 200)
                 if parsed.path == "/api/marketplace/install":
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
                     approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
