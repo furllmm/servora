@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 _DOCKER_HUB_HOSTS = {"hub.docker.com", "www.docker.com"}
 
 from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
+from .source_import import SourceImportError, resolve_url
 
 _CATEGORIES = {"official", "community", "ai_imported"}
 _VERIFICATION = {"verified", "community", "ai_imported", "risk_detected"}
@@ -134,16 +135,40 @@ def import_url(url: str) -> MarketplaceEntry:
             },
             "tags": ["docker-hub", "imported"],
         })
-    raw = _fetch_remote_json(url)
-    items = raw.get("entries") if isinstance(raw.get("entries"), list) else [raw]
-    if len(items) != 1:
-        raise MarketplaceError("Use a marketplace document with one entry for this URL")
-    entry = validate_entry(items[0])
-    source = dict(entry.source)
+    try:
+        resolved = resolve_url(url)
+    except SourceImportError as exc:
+        # Keep the legacy marketplace JSON format as a compatibility path.
+        try:
+            raw = _fetch_remote_json(url)
+        except MarketplaceError:
+            raise MarketplaceError(str(exc)) from exc
+        items = raw.get("entries") if isinstance(raw.get("entries"), list) else [raw]
+        if len(items) != 1:
+            raise MarketplaceError("URL is not a supported installation source or single marketplace entry")
+        entry = validate_entry(items[0])
+        source = dict(entry.source)
+        source.setdefault("url", url)
+        source.setdefault("imported_by", "servora")
+        return MarketplaceEntry(entry.name, entry.version, entry.description, entry.category,
+                                entry.verification, entry.manifest, source, entry.tags)
+
+    manifest = resolved["manifest"]
+    findings = resolved.get("findings", [])
+    verification = "risk_detected" if findings else "community"
+    source = dict(resolved.get("source", {}))
     source.setdefault("url", url)
-    source.setdefault("imported_by", "servora")
-    return MarketplaceEntry(entry.name, entry.version, entry.description, entry.category,
-                            entry.verification, entry.manifest, source, entry.tags)
+    source["imported_by"] = "servora"
+    if findings:
+        source["findings"] = findings
+    return validate_entry({
+        "name": manifest["name"],
+        "category": "community",
+        "verification": verification,
+        "manifest": manifest,
+        "source": source,
+        "tags": ["imported", source.get("type", "remote")],
+    })
 
 
 def _fetch_remote_json(url: str) -> dict[str, Any]:
