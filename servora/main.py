@@ -281,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = p.remove_network(name)
                 return self._json({"name": name, "result": result})
 
-            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/marketplace/fork", "/api/marketplace/install", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/marketplace/fork", "/api/marketplace/install", "/api/marketplace/import", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -425,6 +425,14 @@ class Handler(BaseHTTPRequestHandler):
                     entry = marketplace.save(entry_raw)
                     return self._json({"status": "approved", **result.to_dict(), "marketplace": entry.to_dict()}, 201)
 
+                if parsed.path == "/api/marketplace/import":
+                    url = raw.get("url") if isinstance(raw, dict) else None
+                    imported = marketplace.import_remote(url)
+                    for entry in imported:
+                        audit.append("marketplace.import", "user", name=entry.name, action="import",
+                                     summary="Remote marketplace entry imported",
+                                     details={"remote_url": entry.source.get("remote_url")})
+                    return self._json({"status": "imported", "entries": [entry.to_dict() for entry in imported]}, 201)
                 if parsed.path == "/api/marketplace/publish":
                     entry = marketplace.publish(raw)
                     audit.append("marketplace.publish", "user", name=entry.name, action="publish", summary="Marketplace entry published")
