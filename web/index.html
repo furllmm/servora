@@ -8,10 +8,10 @@
 <div class="card"><h2>✨ Create Container with AI</h2><p class="muted">Describe the container you want. Servora generates a restricted plan, validates it, checks risks, then asks for approval when needed.</p><textarea id="aiCreatePrompt" style="width:100%;min-height:90px;box-sizing:border-box;background:#101319;color:#fff;border:1px solid #333;border-radius:8px;padding:10px" placeholder="Örn: nginx çalıştır, 8080 portundan aç"></textarea><div class="row"><button onclick="aiCreate(false)">Generate Plan</button><button id="aiCreateApprove" onclick="aiCreate(true)" style="display:none">Approve & Launch</button></div><div id="aiCreateResult" class="muted"></div></div>
 <div class="card"><div class="row"><h2>Installed Apps</h2><button onclick="loadApps()">Refresh</button></div><div id="apps" class="muted">Loading…</div></div>
 <div class="card"><div class="row"><h2>Marketplace</h2><button onclick="loadMarketplace()">Refresh</button></div><div class="row"><input id="marketSearch" placeholder="Search apps" style="flex:1"><button onclick="loadMarketplace()">Search</button></div>
-<p class="muted">Import an installation source by URL. Docker Hub repository URLs are supported; public Servora marketplace JSON is also accepted. Enter one URL per line for multiple imports.</p>
+<p class="muted">Import an installation source by URL. Servora can read Docker Hub repositories, GitHub repositories/files, raw Compose or Servora manifests, and supported <code>docker run</code> instructions. Enter one URL per line for multiple imports.</p>
 <textarea id="marketImportUrls" placeholder="https://hub.docker.com/r/linuxserver/sonarr
 https://example.com/servora-marketplace.json" style="width:100%;min-height:80px;box-sizing:border-box;background:#101319;color:#fff;border:1px solid #333;border-radius:8px;padding:10px"></textarea>
-<div class="row"><button onclick="marketImportRemote()">Import to Marketplace</button></div><div id="marketplace" class="muted">Loading…</div></div>
+<div class="row"><button onclick="marketImportRemote()">Import to Marketplace</button></div><div id="marketImportResult" class="muted"></div><div id="marketplace" class="muted">Loading…</div></div>
 <div class="card"><h2>AI Import</h2><p class="muted">Convert an OCI image or a Compose JSON document into a Servora manifest. Risky findings require explicit approval.</p><textarea id="aiSource" style="width:100%;min-height:150px;box-sizing:border-box;background:#101319;color:#fff;border:1px solid #333;border-radius:8px;padding:10px">{
   "type": "oci_image",
   "image": "nginx:alpine",
@@ -56,16 +56,16 @@ async function removeResource(kind,name){const decoded=decodeURIComponent(name);
 
 async function marketImportRemote(){
  const raw=document.getElementById('marketImportUrls').value;
- const urls=[...new Set(raw.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean))];
- const box=document.getElementById('marketplace');
+ const urls=[...new Set(raw.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
+ const box=document.getElementById('marketImportResult');
  if(!urls.length){box.innerHTML='<span class="danger">Enter at least one installation URL.</span>';return}
  if(urls.length>20){box.innerHTML='<span class="danger">You can import at most 20 URLs at once.</span>';return}
  box.textContent='Reading installation sources…';
  try{
   const d=await api('/api/marketplace/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls})});
   let html='<div class="card"><b>Marketplace import</b><p>Imported: '+esc((d.entries||[]).length)+' · Errors: '+esc((d.errors||[]).length)+'</p>';
-  if((d.entries||[]).length) html+='<pre>'+esc(JSON.stringify(d.entries,null,2))+'</pre>';
-  if((d.errors||[]).length) html+='<details open><summary>Import errors</summary><pre>'+esc(JSON.stringify(d.errors,null,2))+'</pre></details>';
+  if((d.entries||[]).length) html+='<details open><summary>Imported entries</summary>'+d.entries.map(e=>'<p><b>'+esc(e.name)+'</b> <span class="pill">'+esc(e.verification||'unknown')+'</span> · '+esc(e.source?.type||'remote')+'</p>').join('')+'</details>';
+  if((d.errors||[]).length) html+='<details open><summary>Import errors</summary>'+d.errors.map(e=>'<p><span class="danger">'+esc(e.url||'URL')+'</span> · '+esc(e.error||'Import failed')+'</p>').join('')+'</details>';
   html+='</div>';
   box.innerHTML=html;
   await loadMarketplace();await loadAudit();
