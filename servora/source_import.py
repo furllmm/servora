@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .ai_import import AIImportError, import_source
 
@@ -26,6 +26,35 @@ _COMPOSE_NAMES = (
 
 class SourceImportError(ValueError):
     pass
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_MAX_REDIRECTS = 5
+
+
+def _open_validated(request: urllib.request.Request):
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    current = request
+    for _ in range(_MAX_REDIRECTS + 1):
+        try:
+            return opener.open(current, timeout=_TIMEOUT)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location")
+            if not location:
+                raise SourceImportError("Import source redirect has no Location header") from exc
+            next_url = urljoin(current.full_url, location)
+            _validate_url(next_url)
+            current = urllib.request.Request(
+                next_url,
+                headers=dict(request.header_items()),
+            )
+    raise SourceImportError("Import source exceeded the redirect limit")
 
 
 def _validate_url(url: Any) -> str:
@@ -52,7 +81,7 @@ def _fetch(url: str, accept: str = "*/*") -> tuple[str, bytes, dict[str, str]]:
         headers={"Accept": accept, "User-Agent": "Servora-Marketplace/1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+        with _open_validated(request) as response:
             final = response.geturl()
             _validate_url(final)
             length = response.headers.get("Content-Length")
