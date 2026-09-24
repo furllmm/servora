@@ -3,6 +3,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import socket
+import shlex
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -159,6 +161,82 @@ def _docker_image_reference(url: str) -> str | None:
         return f"{parts[1]}:latest"
     return None
 
+
+
+def _extract_docker_run(text: str) -> str | None:
+    match = re.search(r'(?m)^\s*(?:sudo\s+)?docker\s+run\s+[^\n]+', text)
+    return match.group(0).strip() if match else None
+
+
+def _readme_result(text: str, source_url: str, source_label: str) -> dict[str, Any]:
+    command = _extract_docker_run(text)
+    if not command:
+        raise SourceImportError('README has no supported docker run installation command')
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        raise SourceImportError(f'Invalid docker run command: {exc}') from exc
+    if len(tokens) < 3 or tokens[:2] != ['docker', 'run']:
+        raise SourceImportError('Not a docker run command')
+    image = None
+    name = source_label
+    ports = []
+    volumes = []
+    environment = {}
+    networks = []
+    command_args = []
+    i = 2
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {'-d', '--detach', '--rm', '--init'}:
+            i += 1
+            continue
+        if token in {'--name','-n','-p','--publish','-v','--volume','-e','--env','--network'}:
+            if i + 1 >= len(tokens):
+                raise SourceImportError(f'{token} requires a value')
+            value=tokens[i+1]
+            if token in {'--name','-n'}: name=value
+            elif token in {'-p','--publish'}:
+                bits=value.rsplit(':',2)
+                if len(bits)==2: host,container=bits
+                elif len(bits)==3: host,container=bits[1:]
+                else: raise SourceImportError(f'Unsupported port mapping: {value}')
+                proto='tcp'
+                if '/' in container: container,proto=container.rsplit('/',1)
+                ports.append({'host':int(host),'container':int(container),'protocol':proto})
+            elif token in {'-v','--volume'}:
+                bits=value.split(':')
+                if len(bits) not in {2,3}: raise SourceImportError(f'Unsupported volume mapping: {value}')
+                source,target=bits[:2]
+                if source.startswith('/') or source.startswith('./') or source.startswith('../'):
+                    raise SourceImportError('README uses a host bind mount; automatic import is refused')
+                volumes.append({'name':source,'container_path':target,'read_only':len(bits)==3 and bits[2]=='ro'})
+            elif token in {'-e','--env'}:
+                if '=' not in value: raise SourceImportError('Environment assignment must contain =')
+                key,val=value.split('=',1); environment[key]=val
+            elif token == '--network': networks.append(value)
+            i += 2
+            continue
+        if token.startswith('-'):
+            if token in {'--privileged','--pid','--ipc','--device','--cap-add','--security-opt','--userns'}:
+                raise SourceImportError(f'Unsupported privileged Docker option: {token}')
+            i += 1
+            continue
+        image=token
+        command_args=tokens[i+1:]
+        break
+    if not image: raise SourceImportError('docker run command has no image')
+    try:
+        result=import_source({'type':'oci_image','image':image,'name':name})
+    except AIImportError as exc:
+        raise SourceImportError(str(exc)) from exc
+    manifest=result.manifest
+    service=manifest['services'][0]
+    service.update({'name':'app','ports':ports,'volumes':volumes,'environment':environment,'networks':networks,'command':command_args})
+    manifest['metadata']['source_type']='docker_run'
+    manifest['metadata']['source_url']=source_url
+    manifest['description']=f'Imported docker run instructions from {source_label}'
+    return {'manifest':manifest,'source':{'type':'docker_run','url':source_url,'command':command},'findings':[f.to_dict() for f in result.findings],'requires_approval':result.requires_approval}
 
 def resolve_url(url: str) -> dict[str, Any]:
     url = _validate_url(url)
