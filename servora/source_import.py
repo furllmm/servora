@@ -227,6 +227,35 @@ def _split_docker_option(token: str) -> tuple[str, str | None]:
     return token, None
 
 
+def _parse_docker_mount(value: str) -> dict[str, Any]:
+    """Convert a safe Docker --mount volume specification into an AppVolume."""
+    options: dict[str, str] = {}
+    flags: set[str] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            key, item = part.split("=", 1)
+            options[key.strip().lower()] = item
+        else:
+            flags.add(part.lower())
+
+    mount_type = options.get("type", "").lower()
+    if mount_type != "volume":
+        raise SourceImportError("Only named Docker volume mounts are supported for automatic import")
+
+    source = options.get("source") or options.get("src")
+    target = options.get("target") or options.get("dst") or options.get("destination")
+    if not source or not target:
+        raise SourceImportError("Docker --mount volume requires source and target")
+    if source.startswith("/") or source.startswith("./") or source.startswith("../"):
+        raise SourceImportError("README uses a host bind mount; automatic import is refused")
+
+    readonly = "readonly" in flags or "ro" in flags or options.get("readonly", "").lower() == "true"
+    return {"name": source, "container_path": target, "read_only": readonly}
+
+
 def _readme_result(text: str, source_url: str, source_label: str) -> dict[str, Any]:
     command = _extract_docker_run(text)
     if not command:
@@ -256,7 +285,7 @@ def _readme_result(text: str, source_url: str, source_label: str) -> dict[str, A
             i += 1
             continue
 
-        if token in {"--name", "-n", "-p", "--publish", "-v", "--volume", "-e", "--env", "--network"}:
+        if token in {"--name", "-n", "-p", "--publish", "-v", "--volume", "--mount", "-e", "--env", "--network"}:
             if inline_value is not None:
                 value = inline_value
                 consumed = 1
@@ -299,6 +328,8 @@ def _readme_result(text: str, source_url: str, source_label: str) -> dict[str, A
                     "container_path": target,
                     "read_only": len(bits) == 3 and bits[2] == "ro",
                 })
+            elif token == "--mount":
+                volumes.append(_parse_docker_mount(value))
             elif token in {"-e", "--env"}:
                 if "=" not in value:
                     raise SourceImportError("Environment assignment must contain =")
