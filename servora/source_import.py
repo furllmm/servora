@@ -273,7 +273,12 @@ def resolve_url(url: str) -> dict[str, Any]:
                 return result
             except SourceImportError:
                 continue
-        raise SourceImportError("GitHub repository has no supported Compose file at its root")
+        readme_url = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/README.md"
+        try:
+            final, data, _ = _fetch(readme_url)
+            return _readme_result(data.decode("utf-8"), final, name)
+        except (SourceImportError, UnicodeDecodeError):
+            raise SourceImportError("GitHub repository has no supported Compose file or docker run instructions")
 
     if _github_raw(url):
         final, data, _ = _fetch(url)
