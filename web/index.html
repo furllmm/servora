@@ -52,7 +52,41 @@ async function removeResource(kind,name){const decoded=decodeURIComponent(name);
 
 async function loadMarketplace(){const box=document.getElementById('marketplace');try{const q=document.getElementById('marketSearch').value.trim();const xs=await api('/api/marketplace'+(q?'?q='+encodeURIComponent(q):''));if(!xs.length){box.textContent='No marketplace entries.';return}box.innerHTML=xs.map(e=>`<div class="card"><b>${esc(e.name)}</b> <span class="pill">v${esc(e.version)}</span> <span class="pill">${esc(e.category)}</span> <span class="pill">${esc(e.verification)}</span><div class="muted">${esc(e.description||'')}</div><button onclick="marketLoad('${esc(e.name)}')">View manifest</button><button onclick="marketInstall('${esc(e.name)}')">Install</button><button onclick="marketFork('${esc(e.name)}')">Fork & Edit</button></div>`).join('')}catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}}
 async function marketLoad(name){try{const e=await api('/api/marketplace/get?name='+encodeURIComponent(name));document.getElementById('manifest').value=JSON.stringify(e.manifest,null,2);document.getElementById('appResult').textContent='Marketplace manifest loaded.'}catch(e){document.getElementById('appResult').textContent=e.message}}
-async function marketInstall(name){await marketLoad(name);await installApp()}
+async function marketInstall(name){
+ const box=document.getElementById('appResult');
+ box.textContent='Preparing marketplace install preview…';
+ try{
+  let r=await fetch('/api/marketplace/install-preview?name='+encodeURIComponent(name));
+  const d=await r.json();
+  if(!r.ok&&r.status!==409)throw Error(d.error||'Preview failed');
+  const m=d.manifest||{}, p=d.preflight||{}, findings=p.findings||[];
+  let html='<div class="card"><b>Marketplace install: '+esc(name)+'</b>';
+  html+='<p><span class="pill">'+esc(d.marketplace?.verification||'unknown')+'</span> '+esc(d.marketplace?.description||'')+'</p>';
+  html+='<p>Version: '+esc(d.marketplace?.version||'unknown')+' · Services: '+esc((m.services||[]).length)+'</p>';
+  html+='<p>Preflight: <span class="pill">'+(p.ok?'OK':'Blocked')+'</span></p>';
+  if(findings.length) html+='<details open><summary>Preflight findings</summary>'+findings.map(f=>'<p><span class="pill">'+esc(f.severity||'unknown')+'</span> '+esc(f.message||f.code||'finding')+'</p>').join('')+'</details>';
+  if(d.already_installed) html+='<p class="danger">This app is already installed. Marketplace install will not overwrite it.</p>';
+  if(!p.ok) html+='<p class="danger">Resolve the preflight errors before installing.</p>';
+  else if(d.requires_approval) html+='<p class="danger"><b>Explicit approval required.</b> Review the manifest and risk findings before installing.</p>';
+  html+='<details><summary>Manifest</summary><pre>'+esc(JSON.stringify(m,null,2))+'</pre></details>';
+  if(p.ok&&!d.already_installed) html+='<button onclick="marketApproveInstall(\''+encodeURIComponent(name)+'\','+(d.requires_approval?'true':'false')+')">'+(d.requires_approval?'Approve & Install':'Install')+'</button>';
+  html+='</div>';
+  box.innerHTML=html;
+ }catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}
+}
+async function marketApproveInstall(encoded, approvalRequired){
+ const name=decodeURIComponent(encoded);
+ if(approvalRequired&&!confirm('This marketplace entry was flagged as risky. Install it only if you reviewed the manifest and findings. Continue?'))return;
+ const box=document.getElementById('appResult');
+ box.textContent='Installing marketplace app…';
+ try{
+  const r=await fetch('/api/marketplace/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,approved:approvalRequired})});
+  const d=await r.json();
+  if(!r.ok)throw Error(d.error||'Marketplace install failed');
+  box.innerHTML='<pre>'+esc(JSON.stringify(d,null,2))+'</pre>';
+  await loadApps();await loadContainers();await loadMarketplace();await loadAudit();
+ }catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}
+}
 async function marketFork(name){await marketLoad(name);document.getElementById('appResult').textContent='Forked into the editor. Modify the manifest, then install or publish it.'}
 async function loadApps(){const box=document.getElementById('apps');try{const xs=await api('/api/apps');if(!xs.length){box.textContent='No Servora-managed apps.';return}const rows=await Promise.all(xs.map(async a=>{let h={status:'unknown',services:[]},u={status:'unknown',services:[]};try{h=await api('/api/apps/health?name='+encodeURIComponent(a.name))}catch(e){h={status:'unknown',services:[]}}try{u=await api('/api/apps/image-status?name='+encodeURIComponent(a.name))}catch(e){u={status:'unknown',services:[]}}return {a,h,u}}));box.innerHTML=rows.map(({a,h,u})=>`<div class="card"><b>${esc(a.name)}</b> <span class="pill">v${esc(a.version)}</span> <span class="pill">${esc(h.status)}</span> <span class="pill">image: ${esc(u.status)}</span><div class="muted">${esc(a.description||'')} · ${h.services.length} service(s)</div><button onclick="editApp('${esc(a.name)}')">Load manifest</button><button onclick="checkAppUpdates('${esc(a.name)}')">Check Updates</button><button onclick="updatePreview('${esc(a.name)}')">Preview</button><button onclick="appAction('${esc(a.name)}','start')">Start</button><button onclick="appAction('${esc(a.name)}','stop')">Stop</button><button onclick="appAction('${esc(a.name)}','restart')">Restart</button><button onclick="uninstallApp('${esc(a.name)}')">Uninstall</button></div>`).join('')}catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}}
 async function checkAppUpdates(name){const box=document.getElementById('appResult');box.textContent='Checking image updates…';try{const d=await api('/api/apps/check-updates?name='+encodeURIComponent(name));box.innerHTML='<pre>'+esc(JSON.stringify(d,null,2))+'</pre>';await loadApps();await loadAudit()}catch(e){box.innerHTML='<span class="danger">'+esc(e.message)+'</span>'}}
