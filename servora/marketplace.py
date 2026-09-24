@@ -91,7 +91,7 @@ def _docker_hub_manifest(url: str) -> dict[str, Any]:
     assert ref is not None
     namespace, repository = ref
     image = f"{namespace}/{repository}:latest"
-    name = _slug(repository)
+    name = _slug(repository if namespace == "library" else f"{namespace}-{repository}")
     description = str(raw.get("description") or raw.get("full_description") or f"Docker Hub image {image}")
     return {
         "name": name,
