@@ -3,13 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
 import re
-import ipaddress
-import socket
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
 from .source_import import SourceImportError, _fetch as _fetch_source, resolve_url
@@ -24,25 +19,6 @@ _REMOTE_TIMEOUT = 15
 class MarketplaceError(ValueError):
     pass
 
-
-def _validate_remote_url(url: Any) -> str:
-    if not isinstance(url, str) or len(url) > 2048:
-        raise MarketplaceError("Remote marketplace URL is invalid")
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise MarketplaceError("Remote marketplace URL must use HTTPS without embedded credentials")
-    try:
-        addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise MarketplaceError(f"Could not resolve marketplace host: {exc}") from exc
-    for address in {item[4][0] for item in addresses}:
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError as exc:
-            raise MarketplaceError("Marketplace host resolved to an invalid address") from exc
-        if not ip.is_global:
-            raise MarketplaceError("Marketplace host resolves to a non-public address")
-    return url
 
 
 def import_url(url: str) -> MarketplaceEntry:
