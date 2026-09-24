@@ -180,3 +180,41 @@ def test_marketplace_rejects_unsupported_docker_run_option(monkeypatch, tmp_path
         assert "privileged" in str(exc)
     else:
         raise AssertionError("privileged docker run should be rejected")
+
+
+
+def test_marketplace_imports_named_docker_mount(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    readme = b"""Install:\n    docker run --name web --mount type=volume,source=webdata,target=/var/lib/data,readonly nginx:alpine\n"""
+
+    def fake_fetch(url, accept="*/*"):
+        return url, readme, {"content_type": "text/plain"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url("https://example.com/README.md")
+    volume = saved.manifest["services"][0]["volumes"][0]
+    assert volume == {
+        "name": "webdata",
+        "container_path": "/var/lib/data",
+        "read_only": True,
+    }
+
+
+def test_marketplace_rejects_bind_docker_mount(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    readme = b"Install:\n    docker run --mount type=bind,source=/srv/data,target=/data nginx:alpine\n"
+
+    def fake_fetch(url, accept="*/*"):
+        return url, readme, {"content_type": "text/plain"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    try:
+        store.import_url("https://example.com/README.md")
+    except Exception as exc:
+        assert "named Docker volume" in str(exc)
+    else:
+        raise AssertionError("bind docker mount should be rejected")
