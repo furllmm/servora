@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .apps import AppManifest, AppManifestError, manifest_to_dict, validate_app_manifest
+from .apps import AppManifestError, manifest_to_dict, validate_app_manifest
 
 _CATEGORIES = {"official", "community", "ai_imported"}
 _VERIFICATION = {"verified", "community", "ai_imported", "risk_detected"}
@@ -115,11 +115,38 @@ class MarketplaceStore:
         self._file(name).unlink(missing_ok=True)
 
     def publish(self, raw: dict[str, Any]) -> MarketplaceEntry:
-        """Publish a user/community entry. It never executes the supplied manifest."""
         entry = validate_entry(raw)
         if entry.category == "official":
             raise MarketplaceError("Official entries cannot be published through the local API")
         return self.save(entry)
+
+    def fork(self, name: str, new_name: str) -> MarketplaceEntry:
+        source = self.get(name)
+        if source is None:
+            raise MarketplaceError("Marketplace app not found")
+        new_name = _slug(new_name)
+        if self.get(new_name) is not None:
+            raise MarketplaceError("Marketplace app already exists")
+        manifest = dict(source.manifest)
+        manifest["name"] = new_name
+        source_meta = dict(source.source)
+        source_meta["forked_from"] = source.name
+        source_meta["forked_from_version"] = source.version
+        return self.save({
+            "name": new_name,
+            "category": "community",
+            "verification": "community",
+            "description": source.description,
+            "manifest": manifest,
+            "source": source_meta,
+            "tags": list(source.tags) + ["fork"],
+        })
+
+    def download(self, name: str) -> dict[str, Any]:
+        entry = self.get(name)
+        if entry is None:
+            raise MarketplaceError("Marketplace app not found")
+        return {"format": "servora-marketplace-v1", "entry": entry.to_dict()}
 
     def seed(self, entries: list[dict[str, Any]]) -> None:
         for entry in entries:
