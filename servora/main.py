@@ -262,7 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = p.remove_network(name)
                 return self._json({"name": name, "result": result})
 
-            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/marketplace/fork", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
+            if parsed.path in {"/api/backups/export", "/api/backups/restore", "/api/apps/install", "/api/apps/update", "/api/apps/update-images", "/api/marketplace/publish", "/api/marketplace/fork", "/api/marketplace/install", "/api/ai/import", "/api/ai/plan", "/api/ai/create", "/api/ai/troubleshoot", "/api/ai/recover", "/api/apps/start", "/api/apps/stop", "/api/apps/restart", "/api/recovery/evaluate", "/api/recovery/policy", "/api/reliability/repair"}:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 512 * 1024:
                     raise ValueError("Manifest body must be between 1 byte and 512 KiB")
@@ -416,6 +416,35 @@ class Handler(BaseHTTPRequestHandler):
                     entry = marketplace.fork(source, new_name)
                     audit.append("marketplace.fork", "user", name=entry.name, action="fork", summary="Marketplace entry forked", details={"source": source})
                     return self._json(entry.to_dict(), 201)
+                if parsed.path == "/api/marketplace/install":
+                    name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
+                    approved = bool(raw.get("approved", False)) if isinstance(raw, dict) else False
+                    entry = marketplace.get(name)
+                    if entry is None:
+                        raise MarketplaceError("Marketplace app not found")
+                    if entry.verification == "risk_detected" and not approved:
+                        return self._json({
+                            "status": "approval_required",
+                            "name": entry.name,
+                            "verification": entry.verification,
+                            "manifest": entry.manifest,
+                            "source": entry.source,
+                        }, 409)
+                    manifest = validate_app_manifest(entry.manifest)
+                    if app_store.get(manifest.name) is not None:
+                        raise AppManifestError("App is already installed; use update")
+                    preflight = preflight_manifest(p, manifest, runtime.root)
+                    if not preflight["ok"]:
+                        raise ReliabilityError(json.dumps(preflight))
+                    try:
+                        result = install_app(p, entry.manifest, transaction_root=runtime.root)
+                        app_store.save(manifest)
+                        deployment = capture_app_state(p, manifest, runtime.root)
+                    except Exception as exc:
+                        audit.append("marketplace.install", "user", status="failed", name=name, action="install", summary="Marketplace app install failed", reason=str(exc))
+                        raise
+                    audit.append("marketplace.install", "user", name=name, action="install", summary="Marketplace app installed", details={"verification": entry.verification, "category": entry.category})
+                    return self._json({"status": "installed", "marketplace": entry.to_dict(), "created": result, "deployment": deployment}, 201)
                 if parsed.path in {"/api/apps/start", "/api/apps/stop", "/api/apps/restart"}:
                     name = _name(raw.get("name", "") if isinstance(raw, dict) else "")
                     app = app_store.get(name)
