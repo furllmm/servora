@@ -37,6 +37,7 @@ _MAX_REDIRECTS = 5
 
 
 def _open_validated(request: urllib.request.Request):
+    """Open a URL while validating every redirect target before connecting."""
     opener = urllib.request.build_opener(_NoRedirectHandler)
     current = request
     for _ in range(_MAX_REDIRECTS + 1):
@@ -47,9 +48,11 @@ def _open_validated(request: urllib.request.Request):
                 raise
             location = exc.headers.get("Location")
             if not location:
+                exc.close()
                 raise SourceImportError("Import source redirect has no Location header") from exc
             next_url = urljoin(current.full_url, location)
             _validate_url(next_url)
+            exc.close()
             current = urllib.request.Request(
                 next_url,
                 headers=dict(request.header_items()),
