@@ -13,6 +13,7 @@ _CATEGORIES = {"official", "community", "ai_imported"}
 _VERIFICATION = {"verified", "community", "ai_imported", "risk_detected"}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _MAX_REMOTE_BYTES = 1024 * 1024
+_MAX_IMPORT_URL_LENGTH = 4096
 _REMOTE_TIMEOUT = 15
 
 
@@ -219,6 +220,13 @@ class MarketplaceStore:
         return {"format": "servora-marketplace-v1", "entry": entry.to_dict()}
 
     def import_url(self, url: str) -> MarketplaceEntry:
+        if not isinstance(url, str):
+            raise MarketplaceError("URL must be a string")
+        url = url.strip()
+        if not url:
+            raise MarketplaceError("URL cannot be empty")
+        if len(url) > _MAX_IMPORT_URL_LENGTH:
+            raise MarketplaceError("URL is too long")
         entry = import_url(url)
         source = dict(entry.source)
         source.setdefault("remote_url", url)
