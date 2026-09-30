@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from .ai_import import AIImportError, import_source
 
@@ -139,16 +139,16 @@ def _github_repo(url: str) -> tuple[str, str] | None:
     return None
 
 
-def _github_file(url: str) -> tuple[str, str, str, str] | None:
+def _github_file(url: str) -> tuple[str, str, list[str]] | None:
     parsed = urlparse(url)
     if parsed.hostname not in {"github.com", "www.github.com"}:
         return None
-    parts = [p for p in parsed.path.split("/") if p]
+    parts = [unquote(p) for p in parsed.path.split("/") if p]
     if len(parts) >= 5 and parts[2] == "blob":
-        owner, repo, _, branch = parts[:4]
-        path = "/".join(parts[4:])
-        if owner and repo and branch and path:
-            return owner, repo, branch, path
+        owner, repo = parts[:2]
+        ref_and_path = parts[3:]
+        if owner and repo and len(ref_and_path) >= 2:
+            return owner, repo, ref_and_path
     return None
 
 
@@ -170,7 +170,10 @@ def _github_api(repo: tuple[str, str]) -> dict[str, Any]:
 
 
 def _github_raw_file(owner: str, repo: str, branch: str, path: str) -> tuple[str, dict[str, Any]]:
-    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+    raw_url = (
+        f"https://raw.githubusercontent.com/{quote(owner, safe='')}/"
+        f"{quote(repo, safe='')}/{quote(branch, safe='/')}/{quote(path, safe='/')}"
+    )
     final, data, _ = _fetch(raw_url)
     return final, _parse_document(data, final)
 
@@ -435,21 +438,32 @@ def resolve_url(url: str) -> dict[str, Any]:
 
     github_file = _github_file(url)
     if github_file:
-        owner, repo, branch, path = github_file
-        try:
-            final, document = _github_raw_file(owner, repo, branch, path)
-        except SourceImportError as exc:
-            raise SourceImportError(f"GitHub file could not be imported: {exc}") from exc
-        result = _manifest_from_document(document, Path(path).stem, final)
-        result["source"] = {
-            "type": "github_file",
-            "url": url,
-            "file_url": final,
-            "repository": f"{owner}/{repo}",
-            "branch": branch,
-            "path": path,
-        }
-        return result
+        owner, repo, ref_and_path = github_file
+        # GitHub branch names may contain '/'. The HTML blob URL does not
+        # delimit the branch from the file path, so try bounded ref prefixes.
+        max_ref_parts = min(12, len(ref_and_path) - 1)
+        last_error: SourceImportError | None = None
+        for ref_length in range(1, max_ref_parts + 1):
+            branch = "/".join(ref_and_path[:ref_length])
+            path = "/".join(ref_and_path[ref_length:])
+            try:
+                final, document = _github_raw_file(owner, repo, branch, path)
+            except SourceImportError as exc:
+                last_error = exc
+                continue
+            result = _manifest_from_document(document, Path(path).stem, final)
+            result["source"] = {
+                "type": "github_file",
+                "url": url,
+                "file_url": final,
+                "repository": f"{owner}/{repo}",
+                "branch": branch,
+                "path": path,
+            }
+            return result
+
+        detail = f": {last_error}" if last_error else ""
+        raise SourceImportError(f"GitHub file could not be imported{detail}")
 
     repo_info = _github_repo(url)
     if repo_info:
