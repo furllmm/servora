@@ -299,3 +299,15 @@ def test_marketplace_import_rejects_invalid_url_port():
         assert "invalid port" in str(exc)
     else:
         raise AssertionError("invalid import URL port should be rejected")
+
+
+def test_marketplace_import_urls_enforces_server_side_limit(tmp_path):
+    from servora.marketplace import MarketplaceError, MarketplaceStore
+
+    store = MarketplaceStore(tmp_path)
+    try:
+        store.import_urls([f"https://example.com/{index}.yaml" for index in range(21)])
+    except MarketplaceError as exc:
+        assert "maximum of 20" in str(exc)
+    else:
+        raise AssertionError("server-side marketplace URL limit should be enforced")
