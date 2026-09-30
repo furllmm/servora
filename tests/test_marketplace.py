@@ -218,3 +218,62 @@ def test_marketplace_rejects_bind_docker_mount(monkeypatch, tmp_path):
         assert "named Docker volume" in str(exc)
     else:
         raise AssertionError("bind docker mount should be rejected")
+
+
+def test_marketplace_imports_github_blob_with_slash_branch(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    compose = {
+        "services": {
+            "web": {
+                "image": "nginx:alpine",
+            }
+        }
+    }
+    attempts = []
+
+    def fake_raw_file(owner, repo, branch, path):
+        attempts.append((owner, repo, branch, path))
+        if branch != "feature/import":
+            raise source_import.SourceImportError("not found")
+        return (
+            f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}",
+            compose,
+        )
+
+    monkeypatch.setattr(source_import, "_github_raw_file", fake_raw_file)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url(
+        "https://github.com/example/project/blob/feature/import/compose.yml"
+    )
+
+    assert saved.manifest["services"][0]["image"] == "nginx:alpine"
+    assert saved.source["type"] == "github_file"
+    assert saved.source["branch"] == "feature/import"
+    assert saved.source["path"] == "compose.yml"
+    assert ("example", "project", "feature/import", "compose.yml") in attempts
+
+
+def test_marketplace_github_blob_branch_probe_is_bounded(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    attempts = []
+
+    def fake_raw_file(owner, repo, branch, path):
+        attempts.append((branch, path))
+        raise source_import.SourceImportError("not found")
+
+    monkeypatch.setattr(source_import, "_github_raw_file", fake_raw_file)
+    store = MarketplaceStore(tmp_path)
+
+    try:
+        store.import_url(
+            "https://github.com/example/project/blob/"
+            "a/b/c/d/e/f/g/h/i/j/k/l/m/compose.yml"
+        )
+    except source_import.SourceImportError:
+        pass
+    else:
+        raise AssertionError("missing GitHub blob should fail")
+
+    assert len(attempts) == 12
