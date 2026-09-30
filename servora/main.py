@@ -113,14 +113,23 @@ class Handler(BaseHTTPRequestHandler):
                 p = self._require_podman()
                 preflight = preflight_manifest(p, manifest, runtime.root)
                 requires_approval = entry.verification == "risk_detected"
+                blocked = already_installed or not preflight["ok"]
+                if requires_approval:
+                    status = "approval_required"
+                elif already_installed:
+                    status = "already_installed"
+                elif not preflight["ok"]:
+                    status = "blocked"
+                else:
+                    status = "ready"
                 return self._json({
-                    "status": "approval_required" if requires_approval else "ready",
+                    "status": status,
                     "marketplace": entry.to_dict(),
                     "manifest": entry.manifest,
                     "preflight": preflight,
                     "already_installed": already_installed,
                     "requires_approval": requires_approval,
-                }, 409 if requires_approval else 200)
+                }, 409 if (requires_approval or blocked) else 200)
 
             if parsed.path == "/api/marketplace/get":
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
