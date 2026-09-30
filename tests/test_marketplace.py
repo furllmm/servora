@@ -373,3 +373,100 @@ def test_marketplace_install_preview_blocks_failed_preflight(monkeypatch):
         main.marketplace = original_marketplace
         main.app_store = original_app_store
         main.preflight_manifest = original_preflight
+
+
+def test_marketplace_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp_path):
+    import json
+    import threading
+    from http.client import HTTPConnection
+
+    import servora.main as main
+
+    class FakeEntry:
+        name = "demo"
+        category = "community"
+        verification = "community"
+        manifest = _entry("demo")["manifest"]
+        source = {"type": "test"}
+
+        def to_dict(self):
+            return {
+                "name": self.name,
+                "category": self.category,
+                "verification": self.verification,
+                "manifest": self.manifest,
+                "source": self.source,
+            }
+
+    class FakeMarketplace:
+        def get(self, name):
+            return FakeEntry() if name == "demo" else None
+
+    class FakeAppStore:
+        def get(self, name):
+            return None
+
+        def save(self, manifest):
+            raise RuntimeError("metadata write failed")
+
+        def remove(self, name):
+            removed.append(name)
+
+    class FakePodman:
+        pass
+
+    removed = []
+    uninstalled = []
+    monkeypatch.setattr(main, "marketplace", FakeMarketplace())
+    monkeypatch.setattr(main, "app_store", FakeAppStore())
+    monkeypatch.setattr(main, "podman", FakePodman())
+    monkeypatch.setattr(main, "validate_app_manifest", lambda manifest: manifest)
+    monkeypatch.setattr(
+        main,
+        "preflight_manifest",
+        lambda *args, **kwargs: {"ok": True, "findings": []},
+    )
+    monkeypatch.setattr(
+        main,
+        "install_app",
+        lambda *args, **kwargs: {"created_containers": ["demo-web"]},
+    )
+    monkeypatch.setattr(
+        main,
+        "capture_app_state",
+        lambda *args, **kwargs: {"services": [{"name": "web"}]},
+    )
+    monkeypatch.setattr(
+        main,
+        "uninstall_app",
+        lambda *args, **kwargs: uninstalled.append(args[1].name) or {"removed": ["demo-web"]},
+    )
+
+    deployment_dir = tmp_path / "metadata" / "deployments"
+    deployment_dir.mkdir(parents=True)
+    monkeypatch.setattr(main.runtime, "root", tmp_path)
+
+    server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        body = json.dumps({"name": "demo"}).encode()
+        conn.request(
+            "POST",
+            "/api/marketplace/install",
+            body=body,
+            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert response.status == 400
+    assert "metadata write failed" in payload["error"]
+    assert uninstalled == ["demo"]
+    assert removed == ["demo"]
