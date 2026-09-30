@@ -477,8 +477,11 @@ class Handler(BaseHTTPRequestHandler):
                         raise ReliabilityError(json.dumps(preflight))
                     try:
                         result = install_app(p, entry.manifest, transaction_root=runtime.root)
-                        app_store.save(manifest)
+                        # Record the deployment only after every created container can
+                        # be inspected successfully. This avoids leaving an installed
+                        # app metadata record without a corresponding deployment state.
                         deployment = capture_app_state(p, manifest, runtime.root)
+                        app_store.save(manifest)
                     except Exception as exc:
                         audit.append("marketplace.install", "user", status="failed", name=name, action="install", summary="Marketplace app install failed", reason=str(exc))
                         raise
