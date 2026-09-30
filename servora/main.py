@@ -107,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
                 name = _name(parse_qs(parsed.query).get("name", [""])[0])
                 entry = marketplace.get(name)
                 if entry is None:
-                    raise MarketplaceError("Marketplace app not found")
+                    return self._json({"error": "marketplace app not found"}, 404)
                 manifest = validate_app_manifest(entry.manifest)
                 already_installed = app_store.get(manifest.name) is not None
                 p = self._require_podman()
@@ -257,7 +257,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             self._json({"error": "not found"}, 404)
-        except (ValueError, PodmanError) as exc:
+        except (ValueError, PodmanError, AppManifestError, MarketplaceError, ReliabilityError,
+                BackupError, RecoveryError, RecoveryPolicyError, AuditError, TroubleshootingError,
+                AIImportError, AIPlanError) as exc:
             self._json({"error": str(exc)}, 400)
 
     def do_POST(self):
