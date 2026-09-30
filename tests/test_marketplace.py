@@ -277,3 +277,25 @@ def test_marketplace_github_blob_branch_probe_is_bounded(monkeypatch, tmp_path):
         raise AssertionError("missing GitHub blob should fail")
 
     assert len(attempts) == 12
+
+
+def test_marketplace_import_rejects_non_443_https_port():
+    from servora.source_import import SourceImportError, _validate_url
+
+    try:
+        _validate_url("https://example.com:8443/source.yaml")
+    except SourceImportError as exc:
+        assert "port 443" in str(exc)
+    else:
+        raise AssertionError("non-443 HTTPS import URL should be rejected")
+
+
+def test_marketplace_import_rejects_invalid_url_port():
+    from servora.source_import import SourceImportError, _validate_url
+
+    try:
+        _validate_url("https://example.com:bad/source.yaml")
+    except SourceImportError as exc:
+        assert "invalid port" in str(exc)
+    else:
+        raise AssertionError("invalid import URL port should be rejected")
