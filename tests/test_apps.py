@@ -374,7 +374,6 @@ def test_resource_transaction_rollback_removes_only_recorded_resources(tmp_path)
 
     p = FakePodman()
     tx = ResourceTransaction(tmp_path, "install", name="demo")
-    tx.record("network", "demo-net") if False else None
     tx.record("networks", "demo-net")
     tx.record("volumes", "demo-data")
     tx.record("containers", "servora-demo-web")
