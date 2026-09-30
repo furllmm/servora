@@ -275,7 +275,8 @@ def _ensure_images(podman, manifest: AppManifest) -> list[dict[str, Any]]:
 
 
 def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
-               transaction_root: str | Path | None = None) -> list[dict[str, Any]]:
+               transaction_root: str | Path | None = None,
+               transaction_holder: list[ResourceTransaction] | None = None) -> list[dict[str, Any]]:
     """Create an app stack with a persistent rollback journal.
 
     Only networks/volumes/containers created by this operation are rolled back.
@@ -283,6 +284,8 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
     """
     manifest = validate_app_manifest(raw_manifest)
     tx = ResourceTransaction(transaction_root, "install", name=manifest.name) if transaction_root else None
+    if tx is not None and transaction_holder is not None:
+        transaction_holder.append(tx)
     created: list[str] = []
     results: list[dict[str, Any]] = []
     try:
