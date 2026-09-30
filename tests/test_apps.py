@@ -357,3 +357,54 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
     assert transaction_rollbacks == [True]
     assert uninstalled == []
     assert removed == ["demo"]
+
+
+def test_resource_transaction_rollback_removes_only_recorded_resources(tmp_path):
+    from servora.transaction import ResourceTransaction
+
+    class FakePodman:
+        def __init__(self):
+            self.calls = []
+        def remove_container(self, name, force=False):
+            self.calls.append(("container", name, force))
+        def remove_volume(self, name, force=False):
+            self.calls.append(("volume", name, force))
+        def remove_network(self, name):
+            self.calls.append(("network", name))
+
+    p = FakePodman()
+    tx = ResourceTransaction(tmp_path, "install", name="demo")
+    tx.record("network", "demo-net") if False else None
+    tx.record("networks", "demo-net")
+    tx.record("volumes", "demo-data")
+    tx.record("containers", "servora-demo-web")
+    result = tx.rollback(p)
+
+    assert result["success"] is True
+    assert tx.data["status"] == "rolled_back"
+    assert p.calls == [
+        ("container", "servora-demo-web", True),
+        ("volume", "demo-data", True),
+        ("network", "demo-net"),
+    ]
+
+
+def test_resource_transaction_rollback_is_idempotent(tmp_path):
+    from servora.transaction import ResourceTransaction
+
+    class FakePodman:
+        def __init__(self):
+            self.calls = 0
+        def remove_container(self, name, force=False):
+            self.calls += 1
+
+    p = FakePodman()
+    tx = ResourceTransaction(tmp_path, "install", name="demo")
+    tx.record("containers", "servora-demo-web")
+
+    first = tx.rollback(p)
+    second = tx.rollback(p)
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert p.calls == 1
