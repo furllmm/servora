@@ -486,8 +486,9 @@ class Handler(BaseHTTPRequestHandler):
                     preflight = preflight_manifest(p, manifest, runtime.root)
                     if not preflight["ok"]:
                         raise ReliabilityError(json.dumps(preflight))
+                    install_tx = []
                     try:
-                        result = install_app(p, entry.manifest, transaction_root=runtime.root)
+                        result = install_app(p, entry.manifest, transaction_root=runtime.root, transaction_holder=install_tx)
                         # Capture and persist metadata only after the resource transaction
                         # has completed. If either metadata step fails, remove the newly
                         # created containers so the failed install does not look usable.
@@ -496,7 +497,10 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         cleanup = None
                         try:
-                            cleanup = uninstall_app(p, manifest)
+                            if install_tx and install_tx[0].data.get("status") == "committed":
+                                cleanup = {"transaction": install_tx[0].rollback(p)}
+                            else:
+                                cleanup = {"uninstall": uninstall_app(p, manifest)}
                             app_store.remove(manifest.name)
                             deployment_file = runtime.root / "metadata" / "deployments" / f"{manifest.name}.json"
                             deployment_file.unlink(missing_ok=True)
@@ -563,8 +567,9 @@ class Handler(BaseHTTPRequestHandler):
                     preflight = preflight_manifest(p, manifest, runtime.root)
                     if not preflight["ok"]:
                         raise ReliabilityError(json.dumps(preflight))
+                    install_tx = []
                     try:
-                        result = install_app(p, raw, transaction_root=runtime.root)
+                        result = install_app(p, raw, transaction_root=runtime.root, transaction_holder=install_tx)
                         deployment = capture_app_state(p, manifest, runtime.root)
                         app_store.save(manifest)
                     except Exception as exc:
