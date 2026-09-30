@@ -563,11 +563,27 @@ class Handler(BaseHTTPRequestHandler):
                         raise ReliabilityError(json.dumps(preflight))
                     try:
                         result = install_app(p, raw, transaction_root=runtime.root)
-                        app_store.save(manifest)
                         deployment = capture_app_state(p, manifest, runtime.root)
+                        app_store.save(manifest)
                     except Exception as exc:
-                        audit.append("app.install", "user", status="failed", name=manifest.name,
-                                     action="install", summary="Servora app install failed", reason=str(exc))
+                        cleanup = None
+                        try:
+                            cleanup = uninstall_app(p, manifest)
+                            app_store.remove(manifest.name)
+                            deployment_file = runtime.root / "metadata" / "deployments" / f"{manifest.name}.json"
+                            deployment_file.unlink(missing_ok=True)
+                        except Exception as cleanup_exc:
+                            cleanup = {"error": str(cleanup_exc), "partial": cleanup}
+                        audit.append(
+                            "app.install",
+                            "user",
+                            status="failed",
+                            name=manifest.name,
+                            action="install",
+                            summary="Servora app install failed",
+                            reason=str(exc),
+                            details={"cleanup": cleanup},
+                        )
                         raise
                     audit.append("app.install", "user", name=manifest.name, action="install", summary="Servora app installed")
                     return self._json({"app": manifest_to_dict(manifest), "created": result, "deployment": deployment}, 201)
