@@ -486,13 +486,30 @@ class Handler(BaseHTTPRequestHandler):
                         raise ReliabilityError(json.dumps(preflight))
                     try:
                         result = install_app(p, entry.manifest, transaction_root=runtime.root)
-                        # Record the deployment only after every created container can
-                        # be inspected successfully. This avoids leaving an installed
-                        # app metadata record without a corresponding deployment state.
+                        # Capture and persist metadata only after the resource transaction
+                        # has completed. If either metadata step fails, remove the newly
+                        # created containers so the failed install does not look usable.
                         deployment = capture_app_state(p, manifest, runtime.root)
                         app_store.save(manifest)
                     except Exception as exc:
-                        audit.append("marketplace.install", "user", status="failed", name=name, action="install", summary="Marketplace app install failed", reason=str(exc))
+                        cleanup = None
+                        try:
+                            cleanup = uninstall_app(p, manifest)
+                            app_store.remove(manifest.name)
+                            deployment_file = runtime.root / "metadata" / "deployments" / f"{manifest.name}.json"
+                            deployment_file.unlink(missing_ok=True)
+                        except Exception as cleanup_exc:
+                            cleanup = {"error": str(cleanup_exc), "partial": cleanup}
+                        audit.append(
+                            "marketplace.install",
+                            "user",
+                            status="failed",
+                            name=name,
+                            action="install",
+                            summary="Marketplace app install failed",
+                            reason=str(exc),
+                            details={"cleanup": cleanup},
+                        )
                         raise
                     audit.append("marketplace.install", "user", name=name, action="install", summary="Marketplace app installed", details={"verification": entry.verification, "category": entry.category})
                     return self._json({"status": "installed", "marketplace": entry.to_dict(), "created": result, "deployment": deployment}, 201)
