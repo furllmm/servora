@@ -311,3 +311,29 @@ def test_marketplace_import_urls_enforces_server_side_limit(tmp_path):
         assert "maximum of 20" in str(exc)
     else:
         raise AssertionError("server-side marketplace URL limit should be enforced")
+
+
+def test_marketplace_import_url_rejects_overlong_url(tmp_path):
+    store = MarketplaceStore(tmp_path)
+    try:
+        store.import_url("https://example.com/" + ("a" * 4097))
+    except MarketplaceError as exc:
+        assert "too long" in str(exc)
+    else:
+        raise AssertionError("overlong marketplace URL should be rejected")
+
+
+def test_marketplace_import_url_normalizes_surrounding_whitespace(monkeypatch, tmp_path):
+    import servora.source_import as source_import
+
+    compose = b"services:\n  web:\n    image: nginx:alpine\n"
+
+    def fake_fetch(url, accept="*/*"):
+        assert url == "https://example.com/compose.yml"
+        return url, compose, {"content_type": "text/yaml"}
+
+    monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    store = MarketplaceStore(tmp_path)
+    saved = store.import_url("  https://example.com/compose.yml  ")
+    assert saved.source["url"] == "https://example.com/compose.yml"
+    assert saved.source["remote_url"] == "https://example.com/compose.yml"
