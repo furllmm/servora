@@ -282,3 +282,66 @@ def test_install_fails_closed_when_existing_resource_cannot_be_inspected():
     }
     with pytest.raises(AppManifestError, match="Could not inspect existing network 'shared-net'"):
         install_app(p, manifest, check_ports=False)
+
+
+def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp_path):
+    import json
+    import threading
+    from http.client import HTTPConnection
+    import servora.main as main
+
+    manifest = {"name": "demo", "version": "1", "services": [{"name": "web", "image": "nginx"}]}
+    removed = []
+    uninstalled = []
+
+    class FakeAppStore:
+        def get(self, name):
+            return None
+        def save(self, value):
+            raise RuntimeError("app metadata write failed")
+        def remove(self, name):
+            removed.append(name)
+
+    class FakePodman:
+        pass
+
+    monkeypatch.setattr(main, "podman", FakePodman())
+    monkeypatch.setattr(main, "app_store", FakeAppStore())
+    monkeypatch.setattr(main, "validate_app_manifest", lambda raw: raw)
+    monkeypatch.setattr(main, "preflight_manifest", lambda *args, **kwargs: {"ok": True, "findings": []})
+    monkeypatch.setattr(main, "install_app", lambda *args, **kwargs: {"created_containers": ["servora-demo-web"]})
+    monkeypatch.setattr(main, "capture_app_state", lambda *args, **kwargs: {"services": [{"name": "web"}]})
+    monkeypatch.setattr(
+        main,
+        "uninstall_app",
+        lambda podman, value: uninstalled.append(value["name"]) or {"removed_containers": ["servora-demo-web"]},
+    )
+
+    monkeypatch.setattr(main.runtime, "root", tmp_path)
+    deployment_dir = tmp_path / "metadata" / "deployments"
+    deployment_dir.mkdir(parents=True)
+
+    server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = json.dumps(manifest).encode()
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        conn.request(
+            "POST",
+            "/api/apps/install",
+            body=body,
+            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert response.status == 400
+    assert "app metadata write failed" in payload["error"]
+    assert uninstalled == ["demo"]
+    assert removed == ["demo"]
