@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 
 from .apps import AppManifestError, service_container_name, validate_app_manifest
+from .transaction import list_operations
 from typing import Any
 
 
@@ -166,6 +167,28 @@ def scan_reliability(podman, root: str | Path) -> dict[str, Any]:
         except OSError as exc:
             findings.append({"severity": "error", "code": "state_read_error",
                              "path": str(audit_path), "message": str(exc)})
+
+    for operation in list_operations(root, limit=100):
+        status = operation.get("status")
+        if status == "active":
+            findings.append({
+                "severity": "warning",
+                "code": "active_transaction",
+                "operation_id": operation.get("id"),
+                "operation": operation.get("operation"),
+                "name": operation.get("name"),
+                "message": "A Servora resource transaction is still marked active",
+            })
+        elif status == "rollback_failed":
+            findings.append({
+                "severity": "error",
+                "code": "transaction_rollback_failed",
+                "operation_id": operation.get("id"),
+                "operation": operation.get("operation"),
+                "name": operation.get("name"),
+                "message": "A Servora resource transaction did not fully roll back",
+                "errors": operation.get("rollback", {}).get("errors", []),
+            })
 
     containers = podman.list_containers(all=True)
     expected = {
