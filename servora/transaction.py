@@ -52,6 +52,8 @@ class ResourceTransaction:
         self._save()
 
     def rollback(self, podman) -> dict:
+        if self.data["status"] == "rolled_back":
+            return dict(self.data["rollback"])
         self.data["rollback"]["attempted"] = True
         errors = []
         for name in reversed(self.data["resources"]["containers"]):
