@@ -67,6 +67,12 @@ def _validate_url(url: Any) -> str:
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise SourceImportError("Import URL must use HTTPS without embedded credentials")
     try:
+        port = parsed.port
+    except ValueError as exc:
+        raise SourceImportError("Import URL has an invalid port") from exc
+    if port not in {None, 443}:
+        raise SourceImportError("Import URL must use HTTPS on port 443")
+    try:
         addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise SourceImportError(f"Could not resolve import host: {exc}") from exc
