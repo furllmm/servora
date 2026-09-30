@@ -293,6 +293,7 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
     manifest = {"name": "demo", "version": "1", "services": [{"name": "web", "image": "nginx"}]}
     removed = []
     uninstalled = []
+    transaction_rollbacks = []
 
     class FakeAppStore:
         def get(self, name):
@@ -309,7 +310,17 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
     monkeypatch.setattr(main, "app_store", FakeAppStore())
     monkeypatch.setattr(main, "validate_app_manifest", lambda raw: raw)
     monkeypatch.setattr(main, "preflight_manifest", lambda *args, **kwargs: {"ok": True, "findings": []})
-    monkeypatch.setattr(main, "install_app", lambda *args, **kwargs: {"created_containers": ["servora-demo-web"]})
+    class FakeInstallTransaction:
+        data = {"status": "committed"}
+        def rollback(self, podman):
+            transaction_rollbacks.append(True)
+            return {"success": True, "errors": []}
+
+    def fake_install(*args, **kwargs):
+        kwargs["transaction_holder"].append(FakeInstallTransaction())
+        return {"created_containers": ["servora-demo-web"]}
+
+    monkeypatch.setattr(main, "install_app", fake_install)
     monkeypatch.setattr(main, "capture_app_state", lambda *args, **kwargs: {"services": [{"name": "web"}]})
     monkeypatch.setattr(
         main,
@@ -343,5 +354,6 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
 
     assert response.status == 400
     assert "app metadata write failed" in payload["error"]
-    assert uninstalled == ["demo"]
+    assert transaction_rollbacks == [True]
+    assert uninstalled == []
     assert removed == ["demo"]
