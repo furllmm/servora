@@ -388,6 +388,47 @@ def test_resource_transaction_rollback_removes_only_recorded_resources(tmp_path)
     ]
 
 
+def test_resource_transaction_rollback_retries_only_failed_resources(tmp_path):
+    from servora.transaction import ResourceTransaction
+
+    class FakePodman:
+        def __init__(self):
+            self.calls = []
+            self.fail_volume_once = True
+
+        def remove_container(self, name, force=False):
+            self.calls.append(("container", name))
+        
+        def remove_volume(self, name, force=False):
+            self.calls.append(("volume", name))
+            if self.fail_volume_once:
+                self.fail_volume_once = False
+                raise RuntimeError("temporary volume failure")
+
+        def remove_network(self, name):
+            self.calls.append(("network", name))
+
+    p = FakePodman()
+    tx = ResourceTransaction(tmp_path, "install", name="demo")
+    tx.record("containers", "servora-demo-web")
+    tx.record("volumes", "demo-data")
+    tx.record("networks", "demo-net")
+
+    first = tx.rollback(p)
+    assert first["success"] is False
+    assert tx.data["status"] == "rollback_failed"
+
+    second = tx.rollback(p)
+    assert second["success"] is True
+    assert tx.data["status"] == "rolled_back"
+    assert p.calls == [
+        ("container", "servora-demo-web"),
+        ("volume", "demo-data"),
+        ("network", "demo-net"),
+        ("volume", "demo-data"),
+    ]
+
+
 def test_resource_transaction_rollback_is_idempotent(tmp_path):
     from servora.transaction import ResourceTransaction
 
