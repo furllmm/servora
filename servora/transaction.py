@@ -30,7 +30,12 @@ class ResourceTransaction:
             "started_at": _now(),
             "finished_at": None,
             "resources": {"containers": [], "volumes": [], "networks": []},
-            "rollback": {"attempted": False, "success": None, "errors": []},
+            "rollback": {
+                "attempted": False,
+                "success": None,
+                "errors": [],
+                "completed": {"containers": [], "volumes": [], "networks": []},
+            },
         }
         self._save()
 
@@ -56,23 +61,29 @@ class ResourceTransaction:
 
             return dict(self.data["rollback"])
         self.data["rollback"]["attempted"] = True
+        rollback = self.data["rollback"]
+        rollback.setdefault("completed", {"containers": [], "volumes": [], "networks": []})
+        completed = rollback["completed"]
         errors = []
+
+        def remove(kind: str, name: str, callback) -> None:
+            if name in completed[kind]:
+                return
+            try:
+                callback()
+                completed[kind].append(name)
+                self._save()
+            except Exception as exc:
+                errors.append(str(exc))
+
         for name in reversed(self.data["resources"]["containers"]):
-            try:
-                podman.remove_container(name, force=True)
-            except Exception as exc:
-                errors.append(str(exc))
+            remove("containers", name, lambda name=name: podman.remove_container(name, force=True))
         for name in reversed(self.data["resources"]["volumes"]):
-            try:
-                podman.remove_volume(name, force=True)
-            except Exception as exc:
-                errors.append(str(exc))
+            remove("volumes", name, lambda name=name: podman.remove_volume(name, force=True))
         for name in reversed(self.data["resources"]["networks"]):
-            try:
-                podman.remove_network(name)
-            except Exception as exc:
-                errors.append(str(exc))
-        self.data["rollback"]["errors"] = errors
+            remove("networks", name, lambda name=name: podman.remove_network(name))
+
+        rollback["errors"] = errors
         self.data["rollback"]["success"] = not errors
         self.data["status"] = "rolled_back" if not errors else "rollback_failed"
         self.data["finished_at"] = _now()
