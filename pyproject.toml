@@ -9,3 +9,7 @@ requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+markers = [
+  "integration: tests that require a real Podman installation",
+]
