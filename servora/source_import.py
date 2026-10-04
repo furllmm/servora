@@ -521,7 +521,18 @@ def resolve_url(url: str) -> dict[str, Any]:
             )
         except SourceImportError:
             raise document_error
-    result = _manifest_from_document(document, Path(urlparse(final).path).stem or "imported-app", final)
+    source_label = Path(urlparse(final).path).stem or "imported-app"
+    try:
+        result = _manifest_from_document(document, source_label, final)
+    except SourceImportError as document_error:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise document_error
+        try:
+            return _readme_result(text, final, source_label)
+        except SourceImportError:
+            raise document_error
     result["source"] = {
         "type": "remote_compose",
         "url": final,
