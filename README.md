@@ -4,7 +4,7 @@
 
 Servora provides a simple UI and API for managing Podman containers, images, volumes, networks, applications, marketplace manifests, and AI-assisted container setup. It is designed for lightweight Linux systems, portable runtimes, and beginner-friendly homelab management without requiring a virtual machine.
 
-**Status:** Active development · **Current:** 0.1.12
+**Status:** Active development · **Current:** 0.1.26
 
 ## Highlights
 - Podman backend with container, image, volume, network, logs, inspect, stats, and lifecycle operations
@@ -33,10 +33,28 @@ Servora
 ```
 
 ## Run
+Install Podman first if it is not already available:
+
+```bash
+sudo apt update
+sudo apt install -y podman
+```
+
+Then start Servora:
+
 ```bash
 python3 -m servora.main
 ```
-Then open `http://127.0.0.1:8787`.
+
+Open `http://127.0.0.1:8787`.
+
+The server binds to loopback by default. For LAN access, explicitly configure the bind address:
+
+```bash
+SERVORA_HOST=0.0.0.0 SERVORA_PORT=8787 python3 -m servora.main
+```
+
+> Exposing Servora beyond localhost should only be done on a trusted network or behind appropriate authentication/reverse-proxy controls. Servora is still under active development.
 
 ## Tests
 ```bash
