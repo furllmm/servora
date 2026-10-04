@@ -351,8 +351,8 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
         server.server_close()
         thread.join(timeout=3)
 
-    assert response.status == 400
-    assert "app metadata write failed" in payload["error"]
+    assert response.status == 500
+    assert payload["error"] == "internal server error"
     assert transaction_rollbacks == [True]
     assert uninstalled == []
     assert removed == ["demo"]
