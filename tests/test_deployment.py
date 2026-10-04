@@ -235,7 +235,7 @@ def test_multi_service_update_failure_restores_only_changed_service(tmp_path):
     assert p.containers["servora-stack-frontend"]["image"] == "sha256:frontend"
     assert p.containers["servora-stack-db"]["running"] is True
     assert p.containers["servora-stack-frontend"]["running"] is True
-    assert load_app_state(tmp_path)["services"][1]["image_id"] == "sha256:backend-old"
+    assert load_app_state(tmp_path, "stack")["services"][1]["image_id"] == "sha256:backend-old"
 
 
 class ImageUpdatePodman:
@@ -292,7 +292,7 @@ def test_image_update_recreates_only_changed_service_and_records_new_image(tmp_p
     assert result["updated_services"] == ["web"]
     assert p.containers["servora-demo-web"]["image"] == "sha256:two"
     assert p.containers["servora-demo-web"]["running"] is True
-    assert load_app_state(tmp_path)["services"][0]["image_id"] == "sha256:two"
+    assert load_app_state(tmp_path, "stack")["services"][0]["image_id"] == "sha256:two"
 
 
 def test_image_update_failure_rolls_back_exact_old_image(tmp_path):
@@ -306,7 +306,7 @@ def test_image_update_failure_rolls_back_exact_old_image(tmp_path):
         raise AssertionError("expected update failure")
     assert p.containers["servora-demo-web"]["image"] == "sha256:one"
     assert p.containers["servora-demo-web"]["running"] is True
-    assert load_app_state(tmp_path)["services"][0]["image_id"] == "sha256:one"
+    assert load_app_state(tmp_path, "stack")["services"][0]["image_id"] == "sha256:one"
 
 
 def test_image_update_current_is_noop(tmp_path):
