@@ -650,8 +650,25 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def run(host="127.0.0.1", port=8787):
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+def run(host: str | None = None, port: int | None = None):
+    """Start the Servora HTTP server with safe loopback defaults."""
+    bind_host = host or os.environ.get("SERVORA_HOST", "127.0.0.1")
+    if port is None:
+        raw_port = os.environ.get("SERVORA_PORT", "8787")
+        try:
+            bind_port = int(raw_port)
+        except ValueError as exc:
+            raise ValueError("SERVORA_PORT must be an integer") from exc
+    else:
+        bind_port = port
+    if not 0 < bind_port < 65536:
+        raise ValueError("port must be between 1 and 65535")
+    server = ThreadingHTTPServer((bind_host, bind_port), Handler)
+    print(f"Servora listening on http://{bind_host}:{bind_port}", flush=True)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
