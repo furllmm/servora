@@ -349,12 +349,36 @@ def test_marketplace_import_url_normalizes_surrounding_whitespace(monkeypatch, t
     assert saved.source["remote_url"] == "https://example.com/compose.yml"
 
 
-def test_marketplace_install_preview_blocks_failed_preflight(monkeypatch):
+def test_marketplace_install_preview_blocks_failed_preflight(monkeypatch, tmp_path):
+    import json
+    import threading
+    from http.client import HTTPConnection
+    from types import SimpleNamespace
     import servora.main as main
+
+    class FakeEntry:
+        name = "demo"
+        category = "community"
+        verification = "community"
+        description = "Demo"
+        tags = ["web"]
+        source = {"type": "test"}
+        manifest = entry()["manifest"]
+
+        def to_dict(self):
+            return {
+                "name": self.name,
+                "category": self.category,
+                "verification": self.verification,
+                "description": self.description,
+                "tags": self.tags,
+                "source": self.source,
+                "manifest": self.manifest,
+            }
 
     class FakeMarketplace:
         def get(self, name):
-            return _entry(name)
+            return FakeEntry() if name == "demo" else None
 
     class FakeAppStore:
         def get(self, name):
@@ -363,26 +387,33 @@ def test_marketplace_install_preview_blocks_failed_preflight(monkeypatch):
     class FakePodman:
         pass
 
-    handler = object.__new__(main.ServoraHandler)
-    handler._require_podman = lambda: FakePodman()
-    # The HTTP handler normally owns these through the module-level stores.
-    original_marketplace = main.marketplace
-    original_app_store = main.app_store
-    original_preflight = main.preflight_manifest
+    monkeypatch.setattr(main, "marketplace", FakeMarketplace())
+    monkeypatch.setattr(main, "app_store", FakeAppStore())
+    monkeypatch.setattr(main, "podman", FakePodman())
+    monkeypatch.setattr(main, "preflight_manifest", lambda *args, **kwargs: {
+        "ok": False,
+        "findings": [{"severity": "error", "code": "low_disk_space", "message": "not enough space"}],
+    })
+    monkeypatch.setattr(main.runtime, "root", tmp_path)
+
+    server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     try:
-        main.marketplace = FakeMarketplace()
-        main.app_store = FakeAppStore()
-        main.preflight_manifest = lambda *args, **kwargs: {
-            "ok": False,
-            "findings": [{"severity": "error", "code": "low_disk_space"}],
-        }
-        # The route-level behavior is covered structurally by the shared
-        # preflight result; endpoint integration is exercised by the HTTP tests.
-        assert main.preflight_manifest(FakePodman(), _entry("demo")["manifest"], "/tmp")["ok"] is False
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        conn.request("GET", "/api/marketplace/install-preview?name=demo")
+        response = conn.getresponse()
+        payload = json.loads(response.read())
+        conn.close()
     finally:
-        main.marketplace = original_marketplace
-        main.app_store = original_app_store
-        main.preflight_manifest = original_preflight
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+    assert response.status == 409
+    assert payload["status"] == "blocked"
+    assert payload["preflight"]["ok"] is False
+    assert payload["preflight"]["findings"][0]["code"] == "low_disk_space"
 
 
 def test_marketplace_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp_path):
