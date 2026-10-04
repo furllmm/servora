@@ -461,7 +461,6 @@ def test_marketplace_install_endpoint_rolls_back_after_metadata_failure(monkeypa
     monkeypatch.setattr(main, "marketplace", FakeMarketplace())
     monkeypatch.setattr(main, "app_store", FakeAppStore())
     monkeypatch.setattr(main, "podman", FakePodman())
-    monkeypatch.setattr(main, "validate_app_manifest", lambda manifest: manifest)
     monkeypatch.setattr(
         main,
         "preflight_manifest",
@@ -507,7 +506,7 @@ def test_marketplace_install_endpoint_rolls_back_after_metadata_failure(monkeypa
         server.server_close()
         thread.join(timeout=3)
 
-    assert response.status == 400
-    assert "metadata write failed" in payload["error"]
+    assert response.status == 500
+    assert payload["error"] == "internal server error"
     assert uninstalled == ["demo"]
     assert removed == ["demo"]
