@@ -531,8 +531,8 @@ def resolve_url(url: str) -> dict[str, Any]:
             raise document_error
         try:
             return _readme_result(text, final, source_label)
-        except SourceImportError:
-            raise document_error
+        except SourceImportError as readme_error:
+            raise readme_error from document_error
     result["source"] = {
         "type": "remote_compose",
         "url": final,
