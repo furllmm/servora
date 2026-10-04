@@ -239,7 +239,7 @@ def test_multi_service_update_failure_restores_only_changed_service(tmp_path):
 
 
 class ImageUpdatePodman:
-    def __init__(self, image_id="sha256:two", fail_create=False):
+    def __init__(self, image_id="sha256:one", fail_create=False):
         self.image_id = image_id
         self.fail_create = fail_create
         self.containers = {"servora-demo-web": {"image": "sha256:one", "running": True}}
