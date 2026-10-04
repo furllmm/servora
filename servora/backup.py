@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .apps import AppStore, install_app, manifest_to_dict
+from .apps import AppStore, install_app, manifest_to_dict, validate_app_manifest
 from .reliability import validate_backup_artifact
 
 
