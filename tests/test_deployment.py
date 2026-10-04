@@ -186,7 +186,7 @@ class MultiServiceImageUpdatePodman:
 
 def _capture_multi_state(p, root):
     capture_app_state(p, multi_service_manifest(), root)
-    state = load_app_state(root)
+    state = load_app_state(root, "stack")
     state["services"][1]["image_id"] = "sha256:backend-old"
     state["services"][1]["image_digest"] = "sha256:digest-backend-old"
     save_app_state(root, "stack", state)
