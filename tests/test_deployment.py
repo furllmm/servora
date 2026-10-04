@@ -273,7 +273,7 @@ class ImageUpdatePodman:
 
     def create_container(self, plan):
         self.calls.append(("create", plan["image"]))
-        if self.fail_create and plan["image"] == self.image_id:
+        if self.fail_create and not plan["image"].startswith("sha256:"):
             raise RuntimeError("new image failed to create")
         resolved_image = plan["image"] if plan["image"].startswith("sha256:") else self.image_id
         self.containers[plan["name"]] = {"image": resolved_image, "running": False}
