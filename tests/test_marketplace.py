@@ -280,7 +280,7 @@ def test_marketplace_github_blob_branch_probe_is_bounded(monkeypatch, tmp_path):
             "https://github.com/example/project/blob/"
             "a/b/c/d/e/f/g/h/i/j/k/l/m/compose.yml"
         )
-    except source_import.SourceImportError:
+    except MarketplaceError:
         pass
     else:
         raise AssertionError("missing GitHub blob should fail")
