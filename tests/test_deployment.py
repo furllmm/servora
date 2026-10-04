@@ -287,17 +287,19 @@ class ImageUpdatePodman:
 def test_image_update_recreates_only_changed_service_and_records_new_image(tmp_path):
     p = ImageUpdatePodman()
     capture_app_state(p, manifest(), tmp_path)
+    p.image_id = "sha256:two"
     result = update_app_images(p, manifest(), tmp_path)
     assert result["status"] == "updated"
     assert result["updated_services"] == ["web"]
     assert p.containers["servora-demo-web"]["image"] == "sha256:two"
     assert p.containers["servora-demo-web"]["running"] is True
-    assert load_app_state(tmp_path, "stack")["services"][0]["image_id"] == "sha256:two"
+    assert load_app_state(tmp_path, "demo")["services"][0]["image_id"] == "sha256:two"
 
 
 def test_image_update_failure_rolls_back_exact_old_image(tmp_path):
     p = ImageUpdatePodman(fail_create=True)
     capture_app_state(p, manifest(), tmp_path)
+    p.image_id = "sha256:two"
     try:
         update_app_images(p, manifest(), tmp_path)
     except RuntimeError as exc:
@@ -306,7 +308,7 @@ def test_image_update_failure_rolls_back_exact_old_image(tmp_path):
         raise AssertionError("expected update failure")
     assert p.containers["servora-demo-web"]["image"] == "sha256:one"
     assert p.containers["servora-demo-web"]["running"] is True
-    assert load_app_state(tmp_path, "stack")["services"][0]["image_id"] == "sha256:one"
+    assert load_app_state(tmp_path, "demo")["services"][0]["image_id"] == "sha256:one"
 
 
 def test_image_update_current_is_noop(tmp_path):
