@@ -18,6 +18,7 @@ def manifest():
     return AppManifest(
         name="demo",
         version="1.0.0",
+        description="Deployment test app",
         services=[AppService(name="web", image="nginx:latest")],
     )
 
