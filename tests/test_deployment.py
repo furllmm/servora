@@ -110,6 +110,7 @@ def multi_service_manifest():
     return AppManifest(
         name="stack",
         version="1.0.0",
+        description="Multi-service deployment test app",
         services=[
             AppService(name="db", image="postgres:old"),
             AppService(name="backend", image="backend:latest", depends_on=["db"]),
