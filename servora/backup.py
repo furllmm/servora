@@ -195,7 +195,10 @@ def _extract_backup(path: Path, target: Path) -> dict[str, Any]:
 
 
 def _resource_name(item: dict[str, Any]) -> str | None:
-    return item.get("Name") or item.get("name")
+    value = item.get("Name") or item.get("name") or item.get("Names")
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    return str(value) if value else None
 
 
 def _image_refs(podman) -> set[str]:
