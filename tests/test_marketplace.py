@@ -98,6 +98,7 @@ services:
         return url, compose, {"content_type": "text/yaml"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("https://example.com/compose.yml")
     assert saved.manifest["name"] == "compose"
@@ -120,6 +121,7 @@ services:
         return url, compose, {"content_type": "text/yaml"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("https://example.com/compose.yml")
     assert saved.verification == "risk_detected"
@@ -135,6 +137,7 @@ def test_marketplace_imports_docker_run_from_readme(monkeypatch, tmp_path):
         return url, readme, {"content_type": "text/plain"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("https://example.com/README.md")
     assert saved.manifest["services"][0]["image"] == "nginx:alpine"
@@ -156,6 +159,7 @@ def test_marketplace_imports_multiline_docker_run_and_inline_options(monkeypatch
         return url, readme, {"content_type": "text/plain"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("https://example.com/README.md")
     service = saved.manifest["services"][0]
@@ -173,6 +177,7 @@ def test_marketplace_rejects_unsupported_docker_run_option(monkeypatch, tmp_path
         return url, readme, {"content_type": "text/plain"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     try:
         store.import_url("https://example.com/README.md")
@@ -192,6 +197,7 @@ def test_marketplace_imports_named_docker_mount(monkeypatch, tmp_path):
         return url, readme, {"content_type": "text/plain"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("https://example.com/README.md")
     volume = saved.manifest["services"][0]["volumes"][0]
@@ -211,6 +217,7 @@ def test_marketplace_rejects_bind_docker_mount(monkeypatch, tmp_path):
         return url, readme, {"content_type": "text/plain"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     try:
         store.import_url("https://example.com/README.md")
@@ -333,6 +340,7 @@ def test_marketplace_import_url_normalizes_surrounding_whitespace(monkeypatch, t
         return url, compose, {"content_type": "text/yaml"}
 
     monkeypatch.setattr(source_import, "_fetch", fake_fetch)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url("  https://example.com/compose.yml  ")
     assert saved.source["url"] == "https://example.com/compose.yml"
