@@ -308,7 +308,6 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
 
     monkeypatch.setattr(main, "podman", FakePodman())
     monkeypatch.setattr(main, "app_store", FakeAppStore())
-    monkeypatch.setattr(main, "validate_app_manifest", lambda raw: raw)
     monkeypatch.setattr(main, "preflight_manifest", lambda *args, **kwargs: {"ok": True, "findings": []})
     class FakeInstallTransaction:
         data = {"status": "committed"}
@@ -325,7 +324,7 @@ def test_app_install_endpoint_rolls_back_after_metadata_failure(monkeypatch, tmp
     monkeypatch.setattr(
         main,
         "uninstall_app",
-        lambda podman, value: uninstalled.append(value["name"]) or {"removed_containers": ["servora-demo-web"]},
+        lambda podman, value: uninstalled.append(value.name) or {"removed_containers": ["servora-demo-web"]},
     )
 
     monkeypatch.setattr(main.runtime, "root", tmp_path)
