@@ -641,6 +641,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"name": name, "result": result})
         except (ValueError, BackupError, PodmanError, AppManifestError, MarketplaceError, AIImportError, AIPlanError, json.JSONDecodeError, TroubleshootingError, RecoveryError, RecoveryPolicyError, AuditError, ReliabilityError) as exc:
             self._json({"error": str(exc)}, 400)
+        except Exception:
+            # Never leave the HTTP client with a closed connection when an
+            # unexpected backend/storage error reaches the request handler.
+            self._json({"error": "internal server error"}, 500)
 
     def log_message(self, *_args):
         pass
