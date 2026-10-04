@@ -261,6 +261,8 @@ class Handler(BaseHTTPRequestHandler):
                 BackupError, RecoveryError, RecoveryPolicyError, AuditError, TroubleshootingError,
                 AIImportError, AIPlanError) as exc:
             self._json({"error": str(exc)}, 400)
+        except Exception:
+            self._json({"error": "internal server error"}, 500)
 
     def do_POST(self):
         parsed = urlparse(self.path)
