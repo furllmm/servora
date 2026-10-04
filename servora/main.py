@@ -575,7 +575,10 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         cleanup = None
                         try:
-                            cleanup = uninstall_app(p, manifest)
+                            if install_tx and install_tx[0].data.get("status") == "committed":
+                                cleanup = {"transaction": install_tx[0].rollback(p)}
+                            else:
+                                cleanup = {"uninstall": uninstall_app(p, manifest)}
                             app_store.remove(manifest.name)
                             deployment_file = runtime.root / "metadata" / "deployments" / f"{manifest.name}.json"
                             deployment_file.unlink(missing_ok=True)
