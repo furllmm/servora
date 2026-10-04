@@ -1,5 +1,6 @@
 from servora.apps import AppManifest, AppService
-from servora.deployment import (capture_app_state, image_status, check_app_updates,\n                                build_app_update_preview, update_app_images, load_app_state, save_app_state)
+from servora.deployment import (capture_app_state, image_status, check_app_updates,
+                                build_app_update_preview, update_app_images, load_app_state, save_app_state)
 
 
 class DeploymentPodman:
