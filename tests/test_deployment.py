@@ -252,7 +252,7 @@ class ImageUpdatePodman:
         return {"Name": name, "Image": item["image"]}
 
     def image_metadata(self, name):
-        return {"name": name, "id": self.image_id, "digest": "sha256:digest-" + self.image_id.split(":")[-1]}
+        return {"name": name, "id": self.image_id, "digest": getattr(self, "digest", "sha256:digest-" + self.image_id.split(":")[-1])}
 
     def container_health(self, name):
         item = self.containers.get(name)
@@ -288,6 +288,7 @@ def test_image_update_recreates_only_changed_service_and_records_new_image(tmp_p
     p = ImageUpdatePodman()
     capture_app_state(p, manifest(), tmp_path)
     p.image_id = "sha256:two"
+    p.digest = "sha256:digest-two"
     result = update_app_images(p, manifest(), tmp_path)
     assert result["status"] == "updated"
     assert result["updated_services"] == ["web"]
@@ -300,6 +301,7 @@ def test_image_update_failure_rolls_back_exact_old_image(tmp_path):
     p = ImageUpdatePodman(fail_create=True)
     capture_app_state(p, manifest(), tmp_path)
     p.image_id = "sha256:two"
+    p.digest = "sha256:digest-two"
     try:
         update_app_images(p, manifest(), tmp_path)
     except RuntimeError as exc:
