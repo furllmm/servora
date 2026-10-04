@@ -54,6 +54,9 @@ class FakePodman:
     def inspect_container(self, name):
         return {"State": {"Status": "running"}}
 
+    def container_health(self, name):
+        return {"name": name, "status": "running", "running": True, "healthcheck": None}
+
 
 def test_execute_uses_restricted_podman_flow(monkeypatch):
     plan = create_container_plan(MockAIProvider(), "nginx")
