@@ -39,6 +39,11 @@ def load_app_state(root: str | Path, app_name: str) -> dict[str, Any] | None:
         return None
     return json.loads(target.read_text(encoding="utf-8"))
 
+def load_deployment_state(root: str | Path, app_name: str) -> dict[str, Any] | None:
+    """Backward-compatible alias for the persisted app deployment state."""
+    return load_app_state(root, app_name)
+
+
 def capture_app_state(podman, manifest: AppManifest, root: str | Path) -> dict[str, Any]:
     services = []
     for service in manifest.services:
