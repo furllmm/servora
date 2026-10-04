@@ -249,6 +249,7 @@ def test_marketplace_imports_github_blob_with_slash_branch(monkeypatch, tmp_path
         )
 
     monkeypatch.setattr(source_import, "_github_raw_file", fake_raw_file)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
     saved = store.import_url(
         "https://github.com/example/project/blob/feature/import/compose.yml"
@@ -271,6 +272,7 @@ def test_marketplace_github_blob_branch_probe_is_bounded(monkeypatch, tmp_path):
         raise source_import.SourceImportError("not found")
 
     monkeypatch.setattr(source_import, "_github_raw_file", fake_raw_file)
+    monkeypatch.setattr(source_import, "_validate_url", lambda url: url)
     store = MarketplaceStore(tmp_path)
 
     try:
