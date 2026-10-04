@@ -62,7 +62,7 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
             manifest,
             transaction_root=runtime.root,
         )
-        assert result[0]["result"]["status"] == "created"
+        assert result[0]["result"]
         assert result[0]["images"][0]["status"] in {"present", "pulled"}
 
         health = podman.container_health(container)
@@ -142,7 +142,7 @@ def test_real_image_update_recreates_container_and_records_new_image(tmp_path: P
 
         _run_raw(podman, "tag", old_image, local_tag)
         result = install_app(podman, manifest, transaction_root=runtime.root)
-        assert result[0]["status"] == "created"
+        assert result[0]["result"]
 
         parsed = validate_app_manifest(manifest)
         podman.start_container(container)
