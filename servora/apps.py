@@ -340,6 +340,7 @@ def install_app(podman, raw_manifest: dict[str, Any], check_ports: bool = True,
             results.append({"service": service.name, "container": name, "result": result, "images": image_results})
         if tx:
             tx.commit()
+        return results
     except Exception:
         if tx:
             tx.rollback(podman)
