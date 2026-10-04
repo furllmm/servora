@@ -81,7 +81,7 @@ def test_real_servora_app_install_state_and_uninstall(tmp_path: Path):
         assert status["status"] == "current"
         assert status["services"][0]["status"] == "current"
 
-        uninstall = uninstall_app(podman, manifest)
+        uninstall = uninstall_app(podman, parsed)
         assert uninstall
         with pytest.raises(PodmanError):
             podman.inspect_container(container)
