@@ -222,7 +222,7 @@ def _extract_docker_run(text: str) -> str | None:
         if not re.match(r"^\s*(?:sudo\s+)?docker\s+run(?:\s|$)", line):
             continue
         command = line.strip()
-        while command.endswith("\") and index + 1 < len(lines):
+        while command.endswith("\\") and index + 1 < len(lines):
             index += 1
             command = command[:-1].rstrip() + " " + lines[index].strip()
         return command
