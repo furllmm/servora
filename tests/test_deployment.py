@@ -175,7 +175,8 @@ class MultiServiceImageUpdatePodman:
         self.calls.append(("create", plan["name"], plan["image"]))
         if self.fail_new_backend and plan["image"] == "backend:latest":
             raise RuntimeError("new backend failed to create")
-        self.containers[plan["name"]] = {"image": plan["image"], "running": False}
+        resolved_image = plan["image"] if plan["image"].startswith("sha256:") else self.image_id
+        self.containers[plan["name"]] = {"image": resolved_image, "running": False}
         return plan["name"]
 
     def start_container(self, name):
