@@ -200,6 +200,10 @@ def resolve_service_order(manifest: AppManifest) -> list[AppService]:
             return
         if state[name] == 1:
             cycle = chain[chain.index(name):] + [name]
+            cycle_nodes = cycle[:-1]
+            start = min(cycle_nodes, key=lambda item: list(by_name).index(item))
+            offset = cycle_nodes.index(start)
+            cycle = cycle_nodes[offset:] + cycle_nodes[:offset] + [start]
             raise AppManifestError("Circular service dependency: " + " -> ".join(cycle))
         state[name] = 1
         for dep in sorted(by_name[name].depends_on):
