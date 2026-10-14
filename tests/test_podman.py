@@ -135,3 +135,38 @@ def test_refresh_image_detects_digest_change_even_with_same_image_id(monkeypatch
     result = p.refresh_image("nginx:latest")
     assert result["status"] == "updated"
     assert result["changed"] is True
+
+
+def test_env_overrides_are_passed_to_subprocess(monkeypatch):
+    """Portable modda Podman env override'ları (CONTAINERS_*) gerçek subprocess'e iletilmeli."""
+    captured = {}
+    p = Podman(executable="podman", env={
+        "CONTAINERS_STORAGE_CONF": "/srv/Servora/podman/storage.conf",
+        "CONTAINERS_GRAPHROOT": "/srv/Servora/podman/storage",
+        "CONTAINERS_RUNROOT": "/srv/Servora/podman/runroot",
+    })
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["env"] = kwargs.get("env", {})
+        return type("R", (), {"returncode": 0, "stdout": "5.0.0\n", "stderr": ""})()
+
+    monkeypatch.setattr("servora.podman.subprocess.run", fake_run)
+    assert p.version() == "5.0.0"
+    assert captured["env"]["CONTAINERS_STORAGE_CONF"] == "/srv/Servora/podman/storage.conf"
+    assert captured["env"]["CONTAINERS_GRAPHROOT"] == "/srv/Servora/podman/storage"
+    assert captured["env"]["CONTAINERS_RUNROOT"] == "/srv/Servora/podman/runroot"
+    # Sistem ortamını bozmadan mevcut değişkenleri korumalı:
+    import os
+    assert captured["env"].get("PATH") == os.environ.get("PATH")
+
+
+def test_missing_podman_binary_raises_podman_error():
+    p = Podman(executable="/nonexistent/podman-binary")
+    from servora.podman import PodmanError
+    try:
+        p.version()
+    except PodmanError as exc:
+        assert "podman" in str(exc).lower() or "no such file" in str(exc).lower()
+    else:
+        raise AssertionError("PodmanError beklenirken başarı döndü")

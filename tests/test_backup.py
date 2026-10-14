@@ -120,3 +120,60 @@ def test_restore_rolls_back_created_resources(tmp_path, monkeypatch):
     assert not p.containers
     assert not p.volumes
     assert not p.networks
+
+
+def test_create_backup_roundtrip_with_fake_podman(tmp_path, monkeypatch):
+    """Gerçek export→inspect→restore akışı (FakePodman; entegrasyon testi DEĞİLDİR)."""
+    import json
+    import pytest
+
+    zstd = __import__("shutil").which("zstd")
+    if not zstd:
+        pytest.skip("zstd binary not available in this environment")
+
+    import servora.backup as backup_mod
+    from servora.runtime import Runtime
+
+    class FakePodman:
+        def list_containers(self, all=True):
+            return []
+
+        def list_volumes(self):
+            return []
+
+        def list_networks(self):
+            return []
+
+        def image_exists(self, name):
+            return True
+
+    runtime = Runtime(tmp_path / "root", mode="portable")
+    runtime.initialize()
+    # Basit bir config dosyası ekle (backup kapsamını doğrulamak için)
+    (runtime.config / "extra.json").write_text('{"k": 1}', encoding="utf-8")
+
+    out = tmp_path / "backup.srv.zst"
+    result = backup_mod.create_backup(runtime.root, out, FakePodman(), include_volumes=False)
+    assert out.is_file()
+    assert result["sha256"] and result["size_bytes"] > 0
+    assert result["validation"]["ok"] is True
+
+    info = backup_mod.inspect_backup(out)
+    manifest = info["manifest"]
+    assert manifest["format"] == "servora-backup"
+    assert manifest["volumes_included"] is False
+
+    # Restore hedefi ayrı bir kök olsun (mevcut veriler korunur).
+    target = tmp_path / "restored"
+    restored = backup_mod.restore_backup(out, target, FakePodman(), approved=True, mode="safe")
+    assert restored.get("ok", True) is not False
+    assert (target / "config" / "extra.json").is_file()
+    assert json.loads((target / "config" / "extra.json").read_text()) == {"k": 1}
+
+
+def test_backup_rejects_bad_filename(tmp_path):
+    import pytest
+    from servora.backup import create_backup, BackupError
+
+    with pytest.raises(BackupError, match=".srv.zst"):
+        create_backup(tmp_path, tmp_path / "backup.tar.gz", object())

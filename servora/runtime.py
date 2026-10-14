@@ -38,6 +38,22 @@ class Runtime:
                 json.dumps({"version": 1, "mode": self.mode}, indent=2) + "\n",
                 encoding="utf-8",
             )
+        # In portable mode, materialize the private Podman storage layout so
+        # CONTAINERS_STORAGE_CONF points at an existing file and graphroot /
+        # runroot directories exist before any podman invocation.
+        if self.mode == "portable":
+            env = self.podman_environment()
+            (self.podman / "storage").mkdir(parents=True, exist_ok=True)
+            (self.podman / "runroot").mkdir(parents=True, exist_ok=True)
+            conf = Path(env["CONTAINERS_STORAGE_CONF"])
+            if not conf.exists():
+                conf.write_text(
+                    "[storage]\n"
+                    f'  driver = "vfs"\n'
+                    f'  graphroot = "{env["CONTAINERS_GRAPHROOT"]}"\n'
+                    f'  runroot = "{env["CONTAINERS_RUNROOT"]}"\n',
+                    encoding="utf-8",
+                )
 
     def podman_environment(self) -> dict[str, str]:
         """Return environment overrides without changing system Podman state."""
