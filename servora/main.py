@@ -89,6 +89,17 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/podman/help":
                 return self._json({"detected": Podman.detect() is not None, "install": Podman.install_help()})
 
+            if parsed.path in ("/", "/index.html"):
+                # Dashboard, Podman'dan bağımsız olarak her zaman sunulmalı;
+                # podman API'leri aşağıda _require_podman ile korunmaya devam eder.
+                body = (WEB / "index.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             p = self._require_podman()
             if parsed.path == "/api/ai/provider":
                 provider = provider_from_env()
@@ -248,14 +259,6 @@ class Handler(BaseHTTPRequestHandler):
                 url = parse_qs(parsed.query).get("url", [""])[0]
                 validate_server_url(url)
                 return self._json(browser.open(url))
-            if parsed.path in ("/", "/index.html"):
-                body = (WEB / "index.html").read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
             self._json({"error": "not found"}, 404)
         except (ValueError, PodmanError, AppManifestError, MarketplaceError, ReliabilityError,
                 BackupError, RecoveryError, RecoveryPolicyError, AuditError, TroubleshootingError,
