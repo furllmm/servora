@@ -138,6 +138,9 @@ def test_create_backup_roundtrip_with_fake_podman(tmp_path, monkeypatch):
         def list_containers(self, all=True):
             return []
 
+        def list_images(self):
+            return []
+
         def list_volumes(self):
             return []
 

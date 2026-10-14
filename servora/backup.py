@@ -356,6 +356,25 @@ def restore_backup(
             manifest = _extract_backup(artifact, staging)
             payload = staging / "payload"
 
+            # Restore plain Servora state directories (config/metadata/logs).
+            # Safe mode never overwrites existing files; new files are copied.
+            # Not recorded in the transaction journal: a failed restore targets
+            # a fresh root and leftover new-only files are harmless, whereas
+            # deleting config/metadata paths during rollback would be unsafe.
+            for relative in ("config", "metadata", "logs"):
+                source = payload / relative
+                if not source.is_dir():
+                    continue
+                destination_root = root / relative
+                for item in source.rglob("*"):
+                    if not item.is_file():
+                        continue
+                    target = destination_root / item.relative_to(source)
+                    if target.exists() or target.is_symlink():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, target, follow_symlinks=False)
+
             # Restore the Servora registry files only after Podman resources have
             # been created successfully. Existing config/metadata/logs are never
             # overwritten by this safe restore mode.

@@ -77,6 +77,14 @@ class Podman:
     def list_networks(self) -> list[dict[str, Any]]:
         return self._json_lines("network", "ls", "--format", "json")
 
+    def info(self) -> dict[str, Any]:
+        """Return ``podman info --format json`` (effective storage, runtime...)."""
+        result = self._run("info", "--format", "json")
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise PodmanError("Podman returned invalid info JSON") from exc
+
     def image_exists(self, name: str) -> bool:
         """Return whether Podman has a local image matching the given reference."""
         if not isinstance(name, str) or not name.strip():
